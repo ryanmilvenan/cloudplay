@@ -10,9 +10,42 @@ package nanoarch
 // The GL path in nanoarch.go is completely unchanged.
 
 /*
+#cgo LDFLAGS: -lvulkan
 #include "libretro.h"
 #include "nanoarch.h"
+#include "../graphics/vulkan/libretro_vulkan.h"
 #include <stdlib.h>
+#include <string.h>
+
+// Trampoline: call create_device2 from the core's negotiation interface.
+// Returns true on success, filling in ctx.
+// If create_device2 is NULL, falls back to create_device (v1).
+// Uses vkGetInstanceProcAddr from the Vulkan loader directly.
+static bool call_create_device(
+    const struct retro_hw_render_context_negotiation_interface_vulkan *neg,
+    struct retro_vulkan_context *ctx,
+    VkInstance instance,
+    VkPhysicalDevice gpu)
+{
+    if (!neg) return false;
+
+    // v2: prefer create_device2 when interface_version >= 2
+    if (neg->interface_version >= 2 && neg->create_device2) {
+        return neg->create_device2(ctx, instance, gpu, VK_NULL_HANDLE,
+                                   vkGetInstanceProcAddr,
+                                   NULL, // create_device_wrapper: use default
+                                   NULL); // opaque
+    }
+    // v1 fallback
+    if (neg->create_device) {
+        return neg->create_device(ctx, instance, gpu, VK_NULL_HANDLE,
+                                  vkGetInstanceProcAddr,
+                                  NULL, 0, // no required extensions
+                                  NULL, 0, // no required layers
+                                  NULL);   // no required features
+    }
+    return false;
+}
 */
 import "C"
 import (
@@ -29,6 +62,10 @@ import (
 type vulkanState struct {
 	enabled bool
 	ctx     *vulkan.VulkanContext
+	// negotiationIface is the core's negotiation interface, set when
+	// the core calls RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE.
+	// We use it in initVulkanVideo to let the core create the VkDevice.
+	negotiationIface unsafe.Pointer
 }
 
 // ── Accessors ──────────────────────────────────────────────────────────────
@@ -93,11 +130,35 @@ func handleGetHWRenderInterface(data unsafe.Pointer) bool {
 // initVulkanVideo creates the headless VulkanContext and immediately fires
 // the core's context_reset callback so it can call GET_HW_RENDER_INTERFACE.
 // This is the Vulkan equivalent of initVideo + context_reset for GL.
+//
+// If the core provided a negotiation interface via
+// SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE (e.g. Dolphin does this), we
+// use the negotiation path: create a minimal instance+GPU ourselves, then let
+// the core create the VkDevice via create_device2 with the extensions it needs.
+// This ensures Dolphin's dispatch table has all required function pointers.
+//
+// If no negotiation interface is available, fall back to creating the full
+// device ourselves (original Phase 2 behaviour).
 func initVulkanVideo() {
 	w := uint32(Nan0.sys.av.geometry.max_width)
 	h := uint32(Nan0.sys.av.geometry.max_height)
+	cfg := vulkan.Config{Width: w, Height: h}
 
-	ctx, err := vulkan.NewVulkanContext(vulkan.Config{Width: w, Height: h})
+	var ctx *vulkan.VulkanContext
+	var err error
+
+	if Nan0.vulkan.negotiationIface != nil {
+		// Negotiation path: let the core create the VkDevice.
+		Nan0.log.Info().Msg("Vulkan: using core negotiation to create device")
+		ctx, err = initVulkanVideoWithNegotiation(cfg)
+		if err != nil {
+			// Fall back to our own device creation on negotiation failure.
+			Nan0.log.Warn().Err(err).Msg("Vulkan negotiation failed, falling back to frontend device")
+			ctx, err = vulkan.NewVulkanContext(cfg)
+		}
+	} else {
+		ctx, err = vulkan.NewVulkanContext(cfg)
+	}
 	if err != nil {
 		panic(fmt.Sprintf("Vulkan: failed to create context: %v", err))
 	}
@@ -108,6 +169,45 @@ func initVulkanVideo() {
 	if Nan0.Video.hw != nil && Nan0.Video.hw.context_reset != nil {
 		C.bridge_context_reset(Nan0.Video.hw.context_reset)
 	}
+}
+
+// initVulkanVideoWithNegotiation creates a VulkanContext by delegating device
+// creation to the core via its negotiation interface callbacks.
+func initVulkanVideoWithNegotiation(cfg vulkan.Config) (*vulkan.VulkanContext, error) {
+	// Create a minimal instance + GPU selection (no VkDevice yet).
+	baseCtx, err := vulkan.NewInstanceOnly()
+	if err != nil {
+		return nil, fmt.Errorf("negotiation: failed to create instance: %w", err)
+	}
+
+	// Call the core's create_device2 (or create_device) so it creates the
+	// VkDevice with all the extensions it needs.
+	neg := (*C.struct_retro_hw_render_context_negotiation_interface_vulkan)(Nan0.vulkan.negotiationIface)
+	var vkCtx C.struct_retro_vulkan_context
+	// Pass instance and physDevice via unsafe.Pointer to avoid cross-package
+	// C type issues; the C helper casts them correctly.
+	ok := C.call_create_device(
+		neg,
+		&vkCtx,
+		(C.VkInstance)(baseCtx.VkInstancePtr()),
+		(C.VkPhysicalDevice)(baseCtx.VkPhysDevicePtr()),
+	)
+	if !bool(ok) {
+		baseCtx.DestroyInstanceOnly()
+		return nil, fmt.Errorf("negotiation: create_device returned false")
+	}
+
+	Nan0.log.Info().Msgf("Vulkan negotiation: device created by core, queue_family=%d", uint32(vkCtx.queue_family_index))
+
+	// Use the device/queue the core created.
+	result := vulkan.NegotiationResult{
+		Instance:    baseCtx.VkInstancePtr(),
+		PhysDevice:  unsafe.Pointer(vkCtx.gpu),
+		Device:      unsafe.Pointer(vkCtx.device),
+		Queue:       unsafe.Pointer(vkCtx.queue),
+		QueueFamily: uint32(vkCtx.queue_family_index),
+	}
+	return vulkan.NewVulkanContextFromNegotiation(cfg, result)
 }
 
 // deinitVulkanVideo tears down the Vulkan context.  Safe to call even if the
@@ -193,8 +293,9 @@ func handleSetHWRenderContextNegotiation(data unsafe.Pointer) bool {
 	if data == nil {
 		return false
 	}
-	// Just acknowledge — we log it for diagnostics.
-	Nan0.log.Info().Msg("SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE: stored (device pre-created by frontend)")
+	// Store the pointer so initVulkanVideo can call create_device2/create_device.
+	Nan0.vulkan.negotiationIface = data
+	Nan0.log.Info().Msg("SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE: stored core negotiation callbacks")
 	return true
 }
 

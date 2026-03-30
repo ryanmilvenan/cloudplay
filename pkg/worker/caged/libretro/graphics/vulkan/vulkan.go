@@ -54,6 +54,47 @@ func NewVulkanContext(cfg Config) (*VulkanContext, error) {
 	}, nil
 }
 
+// NegotiationResult holds the Vulkan handles created by the core during
+// RETRO_HW_RENDER_CONTEXT_NEGOTIATION.
+type NegotiationResult struct {
+	Instance    unsafe.Pointer // VkInstance
+	PhysDevice  unsafe.Pointer // VkPhysicalDevice
+	Device      unsafe.Pointer // VkDevice
+	Queue       unsafe.Pointer // VkQueue
+	QueueFamily uint32
+}
+
+// NewVulkanContextFromNegotiation creates a VulkanContext that wraps handles
+// provided by the core via the negotiation interface (e.g. Dolphin's device).
+// The core owns the instance/device/queue; we only create a command pool.
+//
+// ExternalMemoryEnabled is set to false since we didn't create the device
+// with our extensions (Phase 3 zero-copy won't be available in this mode).
+func NewVulkanContextFromNegotiation(cfg Config, r NegotiationResult) (*VulkanContext, error) {
+	ctx, err := NewContextFromHandles(
+		(C.VkInstance)(r.Instance),
+		(C.VkPhysicalDevice)(r.PhysDevice),
+		(C.VkDevice)(r.Device),
+		(C.VkQueue)(r.Queue),
+		r.QueueFamily,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("vulkan: NewContextFromHandles: %w", err)
+	}
+
+	prov, err := NewProvider(ctx)
+	if err != nil {
+		ctx.Destroy()
+		return nil, fmt.Errorf("vulkan: provider (negotiated): %w", err)
+	}
+
+	return &VulkanContext{
+		cfg:      cfg,
+		ctx:      ctx,
+		provider: prov,
+	}, nil
+}
+
 // ReadFramebuffer reads the current rendered frame from GPU memory and
 // returns the raw RGBA pixel bytes.  size must equal w*h*4.
 //

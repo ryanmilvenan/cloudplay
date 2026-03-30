@@ -62,14 +62,20 @@ type NegotiationResult struct {
 	Device      unsafe.Pointer // VkDevice
 	Queue       unsafe.Pointer // VkQueue
 	QueueFamily uint32
+	// ExternalMemoryReady indicates whether the negotiated VkDevice was
+	// created with VK_KHR_external_memory + VK_KHR_external_memory_fd
+	// (injected by our create_device_wrapper).  When true, zero-copy Phase 3
+	// is available even on the negotiated device path.
+	ExternalMemoryReady bool
 }
 
 // NewVulkanContextFromNegotiation creates a VulkanContext that wraps handles
 // provided by the core via the negotiation interface (e.g. Dolphin's device).
 // The core owns the instance/device/queue; we only create a command pool.
 //
-// ExternalMemoryEnabled is set to false since we didn't create the device
-// with our extensions (Phase 3 zero-copy won't be available in this mode).
+// If r.ExternalMemoryReady is true (the create_device_wrapper successfully
+// injected external-memory extensions), ExternalMemoryEnabled is set to true
+// so the Phase 3 zero-copy path is available.
 func NewVulkanContextFromNegotiation(cfg Config, r NegotiationResult) (*VulkanContext, error) {
 	ctx, err := NewContextFromHandles(
 		(C.VkInstance)(r.Instance),
@@ -81,6 +87,10 @@ func NewVulkanContextFromNegotiation(cfg Config, r NegotiationResult) (*VulkanCo
 	if err != nil {
 		return nil, fmt.Errorf("vulkan: NewContextFromHandles: %w", err)
 	}
+
+	// Propagate external-memory capability to the Context so that the
+	// ZeroCopyBuffer allocation path and ZeroCopyFd export are enabled.
+	ctx.ExternalMemoryEnabled = r.ExternalMemoryReady
 
 	prov, err := NewProvider(ctx)
 	if err != nil {

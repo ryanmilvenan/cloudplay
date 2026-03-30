@@ -12,6 +12,7 @@ package vulkan
 import "C"
 import (
 	"fmt"
+	"unsafe"
 )
 
 // Config holds the parameters needed to initialise the Vulkan context.
@@ -69,8 +70,11 @@ func (v *VulkanContext) ReadFramebuffer(size, w, h uint) []byte {
 
 // RenderInterface returns the libretro Vulkan render interface pointer that
 // the core should receive in response to RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE.
-func (v *VulkanContext) RenderInterface() *C.struct_retro_hw_render_interface_vulkan {
-	return v.provider.Interface()
+// The return type is unsafe.Pointer so that callers in other packages (e.g.
+// nanoarch) can write it into the void** data field without referencing a
+// CGo type across package boundaries.
+func (v *VulkanContext) RenderInterface() unsafe.Pointer {
+	return unsafe.Pointer(v.provider.Interface())
 }
 
 // Deinit destroys all Vulkan resources.

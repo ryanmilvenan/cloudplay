@@ -193,23 +193,26 @@ pkg/worker/caged/libretro/nanoarch/
   nanoarch_novulkan.go    — stubs for the above
 
 pkg/encoder/nvenc/
-  nvenc_cuda.go           — (nvenc+linux) ImportExternalMemory (CUDA fd import
-                            via cuImportExternalMemory + cuExternalMemoryGetMappedBuffer),
-                            NVENC.EncodeFromDevPtr (GPU-only encode hot path)
+  nvenc_cuda.go           — (nvenc+linux) ImportExternalMemory (CUDA fd import,
+                            lifetime-tracked via ExtMemHandle),
+                            cuda_rgba_to_nv12 (PTX BT.601 kernel, JIT-compiled),
+                            NVENC.EncodeFromDevPtr (GPU-only encode hot path),
+                            ReleaseExternalMemory (CUDA handle cleanup)
   nvenc_cuda_stub.go      — (other platforms) stub returns errors
 ```
 
-### What remains (TODOs for Phase 3b / 3c)
+### What remains (TODOs for Phase 3d+)
 
-1. **CUDA external-memory handle lifetime** — `cuda_import_external_memory`
-   currently leaks the `CUexternalMemory` handle.  Wrap it and expose a
-   release function tied to `ZeroCopyBuffer.Destroy()`.
+1. ~~**CUDA external-memory handle lifetime**~~ ✅ **Fixed in Phase 3c** —
+   `ExtMemHandle` wraps `CUexternalMemory`; `ReleaseExternalMemory` is called
+   on `WebrtcMediaPipe.Destroy()`.
 
-2. **RGBA→NV12 GPU conversion** (main visual blocker) — `nvenc_encode_devptr`
-   currently uses a raw `cuMemcpyDtoD` into the hw_frame NV12 surface, which
-   produces incorrect colours.  Replace with an NPP call
-   (`nppiRGBToYCbCr420_8u_P3R`) or a custom CUDA kernel before Phase 3 can be
-   used in production.
+2. ~~**RGBA→NV12 GPU conversion**~~ ✅ **Implemented in Phase 3c** —
+   `nvenc_encode_devptr` now runs two embedded PTX kernels (`rgba_to_nv12_y`
+   and `rgba_to_nv12_uv`) that implement BT.601 studio-swing integer
+   arithmetic, matching the CPU libyuv path.  JIT-compiled at runtime via
+   `cuModuleLoadData` — no nvcc at build time required.  Falls back to Phase 3b
+   raw copy if JIT fails (stable stream, wrong colours).
 
 3. **Command buffer injection** — `go_set_command_buffers` still ignores the
    core's command buffers.  For a truly pipelined zero-copy path, append the
@@ -220,7 +223,11 @@ pkg/encoder/nvenc/
    Wire in a VkSemaphore so the host and core submission are properly ordered
    without the conservative `vkDeviceWaitIdle` / `vkQueueWaitIdle` calls.
 
-### What was done in Phase 3b (this pass)
+5. **PTX kernel unit test** — add a test that instantiates the CUDA module
+   (or mocks the CUDA driver) and validates Y/U/V values against known inputs.
+   Currently the PTX is exercised only by end-to-end encode runs.
+
+### What was done in Phase 3b (commits 8f7c2d2, 6c51e90)
 
 6. **Config flag** ✅ — `encoder.video.zeroCopy` boolean added to `config.Video`
    (default: `false`).  Also exposed in `config.yaml` with full docs.
@@ -243,6 +250,26 @@ pkg/encoder/nvenc/
 
 The CPU readback path is fully preserved as fallback and is the default for all builds.
 
+### What was done in Phase 3c (this pass)
+
+10. **GPU RGBA→NV12 colour conversion** ✅ — Two PTX kernels embedded in
+    `nvenc_cuda.go`:
+    - `rgba_to_nv12_y`: one thread per pixel, BT.601 integer Y calculation
+    - `rgba_to_nv12_uv`: one thread per 2x2 block, 2×2-averaged U/V with
+      BT.601 integer chroma calculation and clamping
+    Both use the same integer coefficients as libyuv `ARGBToI420`, so colours
+    match the CPU fallback path.  JIT-compiled via `cuModuleLoadData` at first
+    use — no nvcc required at build time.
+
+11. **CUexternalMemory leak fixed** ✅ — `cuda_import_external_memory` now
+    returns a `nvenc_extmem_handle` (C struct) wrapped in Go's `ExtMemHandle`.
+    `ReleaseExternalMemory` destroys the `CUexternalMemory` handle properly.
+    `WebrtcMediaPipe.Destroy()` now calls `lazyZeroCopyNVENC.Destroy()` to
+    release both the CUDA handle and the NVENC encoder.
+
+12. **ZeroCopyVideoEncoder.Destroy()** ✅ — Added to the interface; implemented
+    in `lazyZeroCopyNVENC`; called by `WebrtcMediaPipe.Destroy()`.
+
 ### Build tags
 
 | Tag combination            | Behaviour                                                       |
@@ -251,10 +278,9 @@ The CPU readback path is fully preserved as fallback and is the default for all 
 | `nvenc`                    | Phase 1 NVENC + GL readback (CPU upload)                        |
 | `vulkan`                   | Phase 2 Vulkan readback (CPU staging buffer)                    |
 | `vulkan nvenc`             | Phase 2 Vulkan + NVENC; external-mem not enabled                |
-| `vulkan nvenc` on Linux    | Phase 3 available; ext-mem requested at device creation;        |
-|                            | zero-copy blit + CUDA import wired end-to-end;                  |
+| `vulkan nvenc` on Linux    | Phase 3c available; ext-mem + CUDA import + PTX kernel wired;   |
 |                            | gated by `encoder.video.zeroCopy: true` in config.yaml;         |
-|                            | ⚠ colours incorrect until RGBA→NV12 conversion is implemented   |
+|                            | colours now correct (BT.601 = libyuv parity); JIT fallback safe |
 
 ## Dependencies
 

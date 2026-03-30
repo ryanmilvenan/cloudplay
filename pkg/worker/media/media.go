@@ -21,11 +21,17 @@ import (
 // frame buffer (width*height*4 for RGBA8).  It returns the encoded H264
 // NAL bytes, or nil if the encoder is still buffering (EAGAIN).
 //
-// ⚠ EXPERIMENTAL: GPU RGBA→NV12 colour conversion is not yet a proper
-// CUDA/NPP kernel; the current path produces incorrect colours.
-// See pkg/encoder/nvenc/nvenc_cuda.go TODO for details.
+// Destroy must be called when the media pipe is torn down to release CUDA
+// external-memory handles and encoder resources.
+//
+// Phase 3c: GPU RGBA→NV12 colour conversion is implemented via an embedded
+// PTX CUDA kernel loaded at runtime (no nvcc required at build time).
+// BT.601 studio-swing coefficients match the CPU libyuv fallback path.
+// If PTX JIT fails on the target driver, the path degrades gracefully to
+// the Phase 3b raw-copy fallback (stable stream, incorrect colours).
 type ZeroCopyVideoEncoder interface {
 	EncodeFromDevPtr(cudaDevPtr uintptr, size uint64) ([]byte, error)
+	Destroy()
 }
 
 const audioHz = 48000
@@ -79,7 +85,7 @@ type WebrtcMediaPipe struct {
 	// both available at runtime.  When non-nil, ProcessVideoDevPtr drives
 	// encoding directly from a CUDA device pointer without CPU involvement.
 	//
-	// ⚠ EXPERIMENTAL: colour conversion is incomplete — see ZeroCopyVideoEncoder.
+	// Phase 3c: GPU colour conversion (RGBA→NV12) is implemented via PTX kernel.
 	zcMu            sync.RWMutex
 	zcEnc           ZeroCopyVideoEncoder
 	zeroCopyEnabled bool // mirrors config.Video.ZeroCopy
@@ -95,6 +101,16 @@ func (wmp *WebrtcMediaPipe) SetAudioCb(cb func([]byte, int32)) {
 	}
 }
 func (wmp *WebrtcMediaPipe) Destroy() {
+	// Release the zero-copy CUDA handles before the video encoder is torn down.
+	wmp.zcMu.Lock()
+	zc := wmp.zcEnc
+	wmp.zcEnc = nil
+	wmp.zeroCopyEnabled = false
+	wmp.zcMu.Unlock()
+	if zc != nil {
+		zc.Destroy()
+	}
+
 	v := wmp.Video()
 	if v != nil {
 		v.Stop()
@@ -206,7 +222,7 @@ func (wmp *WebrtcMediaPipe) SetZeroCopyEncoder(enc ZeroCopyVideoEncoder) {
 	wmp.zeroCopyEnabled = enc != nil && wmp.vConf.ZeroCopy
 	wmp.zcMu.Unlock()
 	if wmp.zeroCopyEnabled {
-		wmp.log.Info().Msg("media: Phase 3 zero-copy NVENC path armed (⚠ experimental — colours may be wrong)")
+		wmp.log.Info().Msg("media: Phase 3c zero-copy NVENC path armed (GPU RGBA→NV12 PTX kernel; graceful fallback on JIT failure)")
 	}
 }
 
@@ -219,7 +235,7 @@ func (wmp *WebrtcMediaPipe) ZeroCopyActive() bool {
 	return ok
 }
 
-// ProcessVideoZeroCopy encodes one frame via the Phase 3 zero-copy path.
+// ProcessVideoZeroCopy encodes one frame via the Phase 3c zero-copy path.
 //
 // The actual CUDA device pointer is managed internally by the ZeroCopyVideoEncoder
 // implementation (see lazyZeroCopyNVENC in zerocopy.go).  The encoder imports
@@ -230,8 +246,10 @@ func (wmp *WebrtcMediaPipe) ZeroCopyActive() bool {
 // yet available (before the first frame), or if the zero-copy path is not
 // armed.  Callers must fall back to ProcessVideo on nil.
 //
-// ⚠ EXPERIMENTAL: GPU RGBA→NV12 colour conversion is not yet correct.
-// See pkg/encoder/nvenc/nvenc_cuda.go for the TODO.
+// Phase 3c: GPU colour conversion (RGBA→NV12) is performed by an embedded
+// PTX CUDA kernel.  If PTX JIT fails, the path degrades to Phase 3b
+// raw-copy behaviour (stream remains stable, colours may be wrong).
+// The CPU fallback path is always unaffected.
 func (wmp *WebrtcMediaPipe) ProcessVideoZeroCopy() []byte {
 	wmp.zcMu.RLock()
 	enc := wmp.zcEnc

@@ -1,6 +1,6 @@
 //go:build nvenc && linux && vulkan
 
-// Phase 3 zero-copy media path: Vulkan → CUDA → NVENC.
+// Phase 3c zero-copy media path: Vulkan → CUDA → NVENC with GPU colour conversion.
 //
 // This file is compiled only when all three build tags are present:
 //   - vulkan   : Vulkan context provider is available
@@ -11,12 +11,18 @@
 // conditions are met, creates an NVENC encoder, imports the Vulkan external
 // memory fd into CUDA, and registers the encoder on the media pipe.
 //
-// ⚠ EXPERIMENTAL / INCOMPLETE
-// The GPU colour conversion step (RGBA8 → NV12) is currently a raw
-// cuMemcpyDtoD into the hw_frame surface, which produces incorrect colours.
-// The path is intentionally gated behind config.Video.ZeroCopy = true so it
-// cannot be activated accidentally.  See pkg/encoder/nvenc/nvenc_cuda.go for
-// the colour conversion TODO.
+// Colour conversion (Phase 3c)
+// ─────────────────────────────
+// The GPU RGBA→NV12 conversion is performed by an embedded PTX kernel loaded
+// at runtime via cuModuleLoadData/cuLaunchKernel.  This uses BT.601 studio-
+// swing coefficients (matching the CPU libyuv path) and runs entirely on the
+// GPU — no CPU involvement at all in the encode hot path.
+//
+// If PTX JIT fails (very old driver), the path falls back transparently to
+// the Phase 3b raw-copy behaviour (wrong colours, but stable stream).  The
+// CPU encode path is never affected.
+//
+// The path is gated behind config.Video.ZeroCopy = true (default: false).
 
 package media
 
@@ -28,7 +34,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 )
 
-// TryArmZeroCopy attempts to enable the Phase 3 zero-copy encode path on pipe.
+// TryArmZeroCopy attempts to enable the Phase 3c zero-copy encode path on pipe.
 //
 // Parameters:
 //   - pipe        : the WebrtcMediaPipe to arm (must already be Init()'ed)
@@ -41,8 +47,8 @@ import (
 // On false, the caller should keep using the CPU readback path (no error is
 // fatal — a log warning is emitted instead).
 //
-// The function is called once after Init(); the CUDA import is done here
-// (the fd and CUDA handle are stable for the session lifetime).
+// CUDA external-memory import is deferred to the first rendered frame via
+// lazyZeroCopyNVENC, since no frame fd is available at Init() time.
 func TryArmZeroCopy(
 	pipe *WebrtcMediaPipe,
 	vc config.Video,
@@ -58,9 +64,6 @@ func TryArmZeroCopy(
 		return false
 	}
 
-	// Defer the Vulkan fd import to the first rendered frame (lazyZeroCopyNVENC).
-	// At Init() time no frame has been rendered yet, so the fd is not available;
-	// we allocate the NVENC encoder here but bind the CUDA import lazily.
 	opts := &nvenc.Options{
 		Bitrate: vc.Nvenc.Bitrate,
 		Preset:  vc.Nvenc.Preset,
@@ -74,32 +77,43 @@ func TryArmZeroCopy(
 
 	bufSize := uint64(w * h * 4) // RGBA8
 
-	// lazyZeroCopy lazily imports the fd on the first frame.
 	lazy := &lazyZeroCopyNVENC{
-		enc:         enc,
-		bufSize:     bufSize,
-		getFd:       zeroCopyFd,
-		w:           w,
-		h:           h,
-		log:         log,
+		enc:     enc,
+		bufSize: bufSize,
+		getFd:   zeroCopyFd,
+		w:       w,
+		h:       h,
+		log:     log,
 	}
 
 	pipe.SetZeroCopyEncoder(lazy)
-	log.Info().Msgf("media/zerocopy: Phase 3 zero-copy armed (%dx%d, bufSize=%d) — ⚠ EXPERIMENTAL", w, h, bufSize)
+	log.Info().Msgf("media/zerocopy: Phase 3c zero-copy armed (%dx%d, bufSize=%d) — GPU RGBA→NV12 via PTX kernel", w, h, bufSize)
 	return true
 }
 
 // lazyZeroCopyNVENC defers the CUDA external-memory import to the first frame,
 // since the Vulkan exportable fd is not available until after the first render.
+//
+// On cleanup, ReleaseOnDestroy must be called to free the CUDA handle.
 type lazyZeroCopyNVENC struct {
 	enc     *nvenc.NVENC
 	bufSize uint64
 	devPtr  uintptr // 0 until first successful import
+	extMem  *nvenc.ExtMemHandle // non-nil after first successful CUDA import
 	getFd   func(w, h uint) (int, error)
 	w, h    uint
 	log     *logger.Logger
 }
 
+// EncodeFromDevPtr is the hot path: called every frame for zero-copy encode.
+//
+// On the first call it imports the Vulkan fd into CUDA (lazy, since the fd is
+// not available until after the first rendered frame).  Subsequent calls reuse
+// the cached devPtr.
+//
+// The actual CUDA device pointer points to the Vulkan-exported RGBA8 buffer.
+// The NVENC EncodeFromDevPtr method runs the PTX RGBA→NV12 kernel on GPU before
+// handing the converted surface to NVENC.
 func (lz *lazyZeroCopyNVENC) EncodeFromDevPtr(_ uintptr, _ uint64) ([]byte, error) {
 	// Import fd on first frame if not yet done.
 	if lz.devPtr == 0 {
@@ -110,12 +124,26 @@ func (lz *lazyZeroCopyNVENC) EncodeFromDevPtr(_ uintptr, _ uint64) ([]byte, erro
 		if fd < 0 {
 			return nil, fmt.Errorf("zerocopy: Vulkan fd not ready yet (fd=%d)", fd)
 		}
-		devPtr, err := nvenc.ImportExternalMemory(fd, lz.bufSize)
+		devPtr, extMem, err := nvenc.ImportExternalMemory(fd, lz.bufSize)
 		if err != nil {
 			return nil, fmt.Errorf("zerocopy: CUDA import failed: %w", err)
 		}
 		lz.devPtr = devPtr
+		lz.extMem = extMem
 		lz.log.Info().Msgf("media/zerocopy: CUDA external memory imported (fd=%d, devPtr=0x%x)", fd, devPtr)
 	}
 	return lz.enc.EncodeFromDevPtr(lz.devPtr, lz.bufSize)
+}
+
+// Destroy releases the CUDA external-memory handle and shuts down the encoder.
+// Must be called when the media pipe is torn down.
+func (lz *lazyZeroCopyNVENC) Destroy() {
+	if lz.extMem != nil {
+		nvenc.ReleaseExternalMemory(lz.extMem)
+		lz.extMem = nil
+	}
+	if lz.enc != nil {
+		lz.enc.Shutdown()
+		lz.enc = nil
+	}
 }

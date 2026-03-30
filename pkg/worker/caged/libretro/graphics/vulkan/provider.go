@@ -240,6 +240,14 @@ func (p *Provider) Interface() *C.struct_retro_hw_render_interface_vulkan {
 	return p.iface
 }
 
+// QueueLock acquires the shared queue mutex, preventing concurrent access
+// to the Vulkan queue by both the frontend's readback code and the core's
+// lock_queue/unlock_queue callbacks.
+func (p *Provider) QueueLock() { p.queueMu.Lock() }
+
+// QueueUnlock releases the shared queue mutex.
+func (p *Provider) QueueUnlock() { p.queueMu.Unlock() }
+
 // CurrentImage returns the most recently set VkImage and its layout, if any.
 func (p *Provider) CurrentImage() (img C.VkImage, layout C.VkImageLayout, view C.VkImageView) {
 	p.mu.Lock()

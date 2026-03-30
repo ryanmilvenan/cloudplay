@@ -250,3 +250,37 @@ html, body {
 .no-media-controls::-webkit-media-controls {
     display: none !important;
 }
+
+/* ── Orphaned-session recovery button ──
+ * Only shown while #game-list-screen has .loading (Connecting... state).
+ * Hidden automatically once the game list populates via JS.
+ */
+.orphan-recover-btn {
+    display: none; /* hidden by default; JS shows it after a delay */
+    position: absolute;
+    bottom: 32px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    color: rgba(255,255,255,0.5);
+    font-size: 13px;
+    padding: 9px 18px;
+    cursor: pointer;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    z-index: 20;
+}
+.orphan-recover-btn:hover,
+.orphan-recover-btn:active {
+    background: rgba(255,80,80,0.15);
+    border-color: rgba(248,113,113,0.35);
+    color: #f87171;
+}
+/* Show only when the parent still has the .loading class */
+#game-list-screen.loading .orphan-recover-btn {
+    display: block;
+}

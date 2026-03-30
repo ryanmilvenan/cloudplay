@@ -40,3 +40,6 @@ func vulkanZeroCopyFd(_, _ uint) (int, error) {
 
 // IsZeroCopyAvailable always returns false on non-Vulkan builds.
 func (n *Nanoarch) IsZeroCopyAvailable() bool { return false }
+
+// ZeroCopyFd always returns -1 on non-Vulkan builds.
+func (n *Nanoarch) ZeroCopyFd(w, h uint) (int, error) { return vulkanZeroCopyFd(w, h) }

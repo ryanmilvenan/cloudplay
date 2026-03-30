@@ -205,10 +205,11 @@ pkg/encoder/nvenc/
    currently leaks the `CUexternalMemory` handle.  Wrap it and expose a
    release function tied to `ZeroCopyBuffer.Destroy()`.
 
-2. **RGBA→NV12 GPU conversion** — `nvenc_encode_devptr` currently uses a raw
-   `cuMemcpyDtoD` into the hw_frame surface.  Replace with an NPP call
-   (`nppiRGBToYCbCr420_8u_P3R`) or a custom CUDA kernel for correct colourspace
-   conversion before NVENC sees the data.
+2. **RGBA→NV12 GPU conversion** (main visual blocker) — `nvenc_encode_devptr`
+   currently uses a raw `cuMemcpyDtoD` into the hw_frame NV12 surface, which
+   produces incorrect colours.  Replace with an NPP call
+   (`nppiRGBToYCbCr420_8u_P3R`) or a custom CUDA kernel before Phase 3 can be
+   used in production.
 
 3. **Command buffer injection** — `go_set_command_buffers` still ignores the
    core's command buffers.  For a truly pipelined zero-copy path, append the
@@ -219,25 +220,41 @@ pkg/encoder/nvenc/
    Wire in a VkSemaphore so the host and core submission are properly ordered
    without the conservative `vkDeviceWaitIdle` / `vkQueueWaitIdle` calls.
 
-5. **Media pipeline selection** — `media.go` and `frontend.go` currently always
-   call `ReadFramebuffer` (CPU path).  Add a `UseZeroCopy` branch that calls
-   `vulkanZeroCopyFd()` + `ImportExternalMemory()` + `EncodeFromDevPtr()` when
-   `nano.IsZeroCopyAvailable()` returns true.
+### What was done in Phase 3b (this pass)
 
-6. **Config flag** — expose a `worker.video.zero_copy` boolean config option to
-   gate Phase 3 on/off at runtime.
+6. **Config flag** ✅ — `encoder.video.zeroCopy` boolean added to `config.Video`
+   (default: `false`).  Also exposed in `config.yaml` with full docs.
+
+7. **Media/frontend wiring** ✅ — `pkg/worker/media/` now has:
+   - `ZeroCopyVideoEncoder` interface
+   - `WebrtcMediaPipe.SetZeroCopyEncoder` / `ZeroCopyActive` / `ProcessVideoZeroCopy`
+   - `ProcessVideo` transparently routes through zero-copy first, falls back to CPU
+   - `TryArmZeroCopy` (build-tag-safe) arms the path after `Init()` in the coordinator handler
+   - `zerocopy_stub.go` for non-nvenc/non-vulkan builds
+
+8. **nanoarch / frontend / Caged exposure** ✅ — `Nanoarch.ZeroCopyFd(w, h)` method
+   added (vulkan + novulkan builds), `Frontend.IsZeroCopyAvailable()` and
+   `Frontend.ZeroCopyFd()` wired, `Caged.IsZeroCopyAvailable()` and
+   `Caged.ZeroCopyFd()` exposed to the coordinator.
+
+9. **Coordinator wiring** ✅ — `HandleGameStart` now calls `TryArmZeroCopy` when
+   `config.ZeroCopy && app.IsZeroCopyAvailable()`.  The zero-copy NVENC encoder
+   is created lazily (CUDA fd import happens on first rendered frame).
+
+The CPU readback path is fully preserved as fallback and is the default for all builds.
 
 ### Build tags
 
-| Tag combination            | Behaviour                                        |
-|----------------------------|--------------------------------------------------|
-| (default)                  | Phase 1 x264 + GL readback                       |
-| `nvenc`                    | Phase 1 NVENC + GL readback                      |
-| `vulkan`                   | Phase 2 Vulkan readback (CPU staging buffer)     |
-| `vulkan nvenc`             | Phase 2 Vulkan + NVENC; external-mem not enabled |
-| `vulkan nvenc` on Linux    | Phase 3 scaffold active; ext-mem requested;      |
-|                            | zero-copy blit runs if driver supports it;        |
-|                            | `EncodeFromDevPtr` path available                 |
+| Tag combination            | Behaviour                                                       |
+|----------------------------|-----------------------------------------------------------------|
+| (default)                  | Phase 1 x264 + GL readback                                      |
+| `nvenc`                    | Phase 1 NVENC + GL readback (CPU upload)                        |
+| `vulkan`                   | Phase 2 Vulkan readback (CPU staging buffer)                    |
+| `vulkan nvenc`             | Phase 2 Vulkan + NVENC; external-mem not enabled                |
+| `vulkan nvenc` on Linux    | Phase 3 available; ext-mem requested at device creation;        |
+|                            | zero-copy blit + CUDA import wired end-to-end;                  |
+|                            | gated by `encoder.video.zeroCopy: true` in config.yaml;         |
+|                            | ⚠ colours incorrect until RGBA→NV12 conversion is implemented   |
 
 ## Dependencies
 

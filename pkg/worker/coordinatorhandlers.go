@@ -188,6 +188,35 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 		m.SetRot(app.Rotation())
 
 		r.BindAppMedia()
+
+		// Phase 3: attempt to arm the Vulkan→CUDA→NVENC zero-copy encode path.
+		//
+		// Conditions (all must hold):
+		//   1. config.Encoder.Video.ZeroCopy == true  (explicit opt-in; default false)
+		//   2. codec == "h264_nvenc"
+		//   3. Vulkan HW render context is active and the device supports
+		//      VK_KHR_external_memory_fd (NVIDIA Linux with nvenc build tag)
+		//
+		// If any condition fails, TryArmZeroCopy returns false and the CPU
+		// readback path (already set by BindAppMedia) remains active.
+		//
+		// When armed, ProcessVideo transparently routes frames through
+		// GPU-direct NVENC and falls back to CPU on the rare frames where
+		// the fd is not yet exported (e.g. the very first frame).
+		//
+		// ⚠ EXPERIMENTAL: GPU RGBA→NV12 colour conversion is incomplete.
+		// See pkg/encoder/nvenc/nvenc_cuda.go TODO for details.
+		if w.conf.Encoder.Video.ZeroCopy && app.IsZeroCopyAvailable() {
+			vw, vh := uint(m.VideoW), uint(m.VideoH)
+			media.TryArmZeroCopy(
+				m,
+				w.conf.Encoder.Video,
+				vw, vh,
+				func(fw, fh uint) (int, error) { return app.ZeroCopyFd(fw, fh) },
+				w.log,
+			)
+		}
+
 		r.StartApp()
 	}
 

@@ -47,3 +47,9 @@ func (n *Nanoarch) IsZeroCopyAvailable() bool { return false }
 
 // ZeroCopyFd always returns -1 on non-Vulkan builds.
 func (n *Nanoarch) ZeroCopyFd(w, h uint) (int, error) { return vulkanZeroCopyFd(w, h) }
+
+// handleSetHWRenderContextNegotiation returns false on non-Vulkan builds.
+func handleSetHWRenderContextNegotiation(_ unsafe.Pointer) bool { return false }
+
+// handleGetHWRenderContextNegotiationSupport returns false on non-Vulkan builds.
+func handleGetHWRenderContextNegotiationSupport(_ unsafe.Pointer) bool { return false }

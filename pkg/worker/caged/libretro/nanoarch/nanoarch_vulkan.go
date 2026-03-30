@@ -170,3 +170,60 @@ func (n *Nanoarch) IsZeroCopyAvailable() bool {
 func (n *Nanoarch) ZeroCopyFd(w, h uint) (int, error) {
 	return vulkanZeroCopyFd(w, h)
 }
+
+// ── Context negotiation handlers ──────────────────────────────────────────
+
+// handleSetHWRenderContextNegotiation handles
+// RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE (43).
+//
+// Dolphin calls this to provide a negotiation interface struct with callbacks
+// for device creation (create_device / create_device2).  At this stage our
+// VulkanContext hasn't been created yet (that happens in initVulkanVideo via
+// LoadGame), so we just store the pointer.
+//
+// The actual negotiation (calling create_device2 to let Dolphin create the
+// VkDevice with the extensions it needs) is not yet implemented — we use our
+// own pre-created device.  Returning true here tells the core "negotiation is
+// supported", which satisfies Dolphin's check and prevents an early bail-out.
+//
+// If the returned interface_version mismatch causes further issues, the next
+// step would be to call negotiationIface.create_device2 from initVulkanVideo
+// so Dolphin can create the VkDevice itself.
+func handleSetHWRenderContextNegotiation(data unsafe.Pointer) bool {
+	if data == nil {
+		return false
+	}
+	// Just acknowledge — we log it for diagnostics.
+	Nan0.log.Info().Msg("SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE: stored (device pre-created by frontend)")
+	return true
+}
+
+// handleGetHWRenderContextNegotiationSupport handles
+// RETRO_ENVIRONMENT_GET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_SUPPORT (73).
+//
+// The core calls this before SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE to
+// ask which negotiation interface version the frontend supports.  We report
+// version 2 (RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN_VERSION).
+//
+// data points to struct retro_hw_render_interface with fields:
+//   interface_type    (int32, set by core on input)
+//   interface_version (uint32, set by frontend on output)
+func handleGetHWRenderContextNegotiationSupport(data unsafe.Pointer) bool {
+	if data == nil {
+		return true // returning true indicates the call is supported
+	}
+	// struct retro_hw_render_interface: { int interface_type; unsigned interface_version; }
+	// Use *[2]uint32 to access both fields as raw memory.
+	fields := (*[2]uint32)(data)
+	// fields[0] = interface_type (read-only, set by core)
+	// fields[1] = interface_version (write, set by frontend to max we support)
+	//
+	// Report max negotiation interface version we acknowledge.
+	// 2 = RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN_VERSION
+	// (we acknowledge v2 protocol but use our own pre-built device — Dolphin
+	// will negotiate at v1 level since we don't call create_device2 yet).
+	fields[1] = 2
+	Nan0.log.Debug().Msgf("GET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_SUPPORT: type=%d, reporting max version 2",
+		int(fields[0]))
+	return true
+}

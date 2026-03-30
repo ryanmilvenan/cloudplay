@@ -17,7 +17,7 @@ sleep 2 && \
 sleep 3 && \
 while true; do \
   echo \"[worker-supervisor] Starting worker...\"; \
-  CLOUD_GAME_WEBRTC_SINGLEPORT=9754 ./worker; \
+  ./worker; \
   EXIT_CODE=$?; \
   echo \"[worker-supervisor] Worker exited with code $EXIT_CODE, restarting in 3s...\"; \
   sleep 3; \

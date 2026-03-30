@@ -382,11 +382,21 @@ encoder:
       preset: p4
       # NVENC tune: ll (low latency), ull (ultra-low latency), hq (high quality)
       tune: ll
-    # Phase 3 Vulkan→CUDA→NVENC zero-copy encode path.
-    # Requires: codec=h264_nvenc, Vulkan HW render core, NVIDIA Linux driver.
-    # ⚠ EXPERIMENTAL / INCOMPLETE: GPU colour conversion (RGBA→NV12) is not
-    #   yet implemented correctly — enable only for development/testing of the
-    #   plumbing (see pkg/encoder/nvenc/nvenc_cuda.go TODO).
+    # Phase 3c Vulkan→CUDA→NVENC zero-copy encode path.
+    # Requires: codec=h264_nvenc + -tags 'vulkan nvenc' build + NVIDIA Linux driver.
+    #
+    # When enabled: Vulkan device memory is exported as a Linux fd, imported into
+    # CUDA, and encoded by NVENC without any CPU copies.  GPU colour conversion
+    # (RGBA8→NV12) is performed by an embedded PTX kernel (BT.601 studio-swing,
+    # matching the CPU libyuv path) compiled at runtime via CUDA JIT — no nvcc
+    # needed at build time.
+    #
+    # If PTX JIT fails on the target driver (very old drivers), the path degrades
+    # gracefully to a raw GPU copy (stream stays up, colours incorrect).  The CPU
+    # readback path is always unaffected and remains the default (zeroCopy: false).
+    #
+    # ⚠ EXPERIMENTAL: tested only on NVIDIA RTX 30xx with driver ≥ 525.
+    #   Verify output with a test stream before using in production.
     zeroCopy: false
 
 # game recording

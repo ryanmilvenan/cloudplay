@@ -4,26 +4,13 @@ package nvenc
 
 /*
 #cgo pkg-config: libavcodec libavutil
-#include <libavcodec/avcodec.h>
+#include "nvenc_ctx.h"
 #include <libavutil/opt.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_cuda.h>
 #include <libavutil/pixfmt.h>
 #include <stdlib.h>
 #include <string.h>
-
-// nvenc_ctx holds all FFmpeg state for one h264_nvenc encoding session.
-typedef struct {
-    AVCodecContext *codec_ctx;
-    AVFrame        *frame;
-    AVPacket       *packet;
-    AVBufferRef    *hw_device_ctx;
-    int             width;
-    int             height;
-    int             y_size;   // luma plane size (w*h)
-    int             uv_size;  // each chroma plane size (w*h/4)
-    int64_t         pts;
-} nvenc_ctx;
 
 // nvenc_new allocates and opens an h264_nvenc encoder.
 // Returns NULL and sets err_msg (static buffer) on failure.

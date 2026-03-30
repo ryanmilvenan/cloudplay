@@ -204,8 +204,9 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 		// GPU-direct NVENC and falls back to CPU on the rare frames where
 		// the fd is not yet exported (e.g. the very first frame).
 		//
-		// ⚠ EXPERIMENTAL: GPU RGBA→NV12 colour conversion is incomplete.
-		// See pkg/encoder/nvenc/nvenc_cuda.go TODO for details.
+		// Phase 3c: GPU RGBA→NV12 colour conversion is now implemented via
+		// embedded PTX kernels (BT.601, JIT-compiled).  Falls back to raw
+		// copy if PTX JIT fails (stream stays up, colours may be wrong).
 		if w.conf.Encoder.Video.ZeroCopy && app.IsZeroCopyAvailable() {
 			vw, vh := uint(m.VideoW), uint(m.VideoH)
 			media.TryArmZeroCopy(

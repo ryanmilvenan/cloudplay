@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#define RETRO_HW_RENDER_INTERFACE_VULKAN 0
+#define RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN 0
 #define RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN_VERSION 1
 
 /* ── Callback typedefs ──────────────────────────────────────────────────── */

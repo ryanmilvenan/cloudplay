@@ -55,12 +55,16 @@ RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
     libjpeg-turbo8-dev \
     libx264-dev \
     libspeexdsp-dev \
+    libavcodec-dev \
+    libavutil-dev \
+    libvulkan-dev \
+    nvidia-cuda-toolkit \
     pkg-config \
 && rm -rf /var/lib/apt/lists/*
 
 # by default we ignore all except some folders and files, see .dockerignore
 COPY . ./
-RUN --mount=type=cache,target=/root/.cache/go-build make GO_TAGS=static,st build.worker
+RUN --mount=type=cache,target=/root/.cache/go-build make GO_TAGS=static,st,vulkan,nvenc build.worker
 RUN find ./bin/* | xargs upx --best --lzma
 
 WORKDIR /usr/local/share/cloud-game
@@ -78,6 +82,9 @@ FROM ubuntu:plucky AS worker
 
 RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
     curl \
+    ffmpeg \
+    libcudart12 \
+    libvulkan1 \
     libx11-6 \
     libxext6 \
  && apt-get autoremove \
@@ -90,8 +97,8 @@ COPY --from=build_worker /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 ADD https://github.com/sergystepanov/mesa-llvmpipe/releases/download/v1.0.0/libGL.so.1.5.0 \
     /usr/lib/x86_64-linux-gnu/
 RUN cd /usr/lib/x86_64-linux-gnu && \
-    ln -s libGL.so.1.5.0 libGL.so.1 && \
-    ln -s libGL.so.1 libGL.so
+    ln -sf libGL.so.1.5.0 libGL.so.1 && \
+    ln -sf libGL.so.1 libGL.so
 
 FROM worker AS cloud-game
 

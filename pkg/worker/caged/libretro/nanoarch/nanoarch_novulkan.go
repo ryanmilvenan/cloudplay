@@ -16,6 +16,10 @@ type vulkanState struct {
 // IsVulkan always returns false when Vulkan support is not compiled in.
 func (n *Nanoarch) IsVulkan() bool { return false }
 
+// preferredHWContextIsVulkan reports that Vulkan is not available on builds
+// without the vulkan tag.
+func preferredHWContextIsVulkan() bool { return false }
+
 // handleVulkanHWRender returns false, signalling to the core that we cannot
 // satisfy its Vulkan HW render request.  The GL path will remain active.
 func handleVulkanHWRender(_ unsafe.Pointer) bool { return false }

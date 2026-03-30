@@ -5,6 +5,7 @@ package vulkan
 /*
 #cgo LDFLAGS: -lvulkan
 #include "libretro_vulkan.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,49 +13,65 @@ package vulkan
 // These have the exact signatures required by the libretro Vulkan interface
 // and are registered as function pointers in the render interface struct.
 
-extern void   go_set_image(void *handle, const struct retro_vulkan_image *image,
-                           uint32_t num_sems, const VkSemaphore *sems, uint32_t src_qf);
+extern void   go_set_image(void *handle, struct retro_vulkan_image *image,
+                           uint32_t num_sems, VkSemaphore *sems, uint32_t src_qf);
 extern uint32_t go_get_sync_index(void *handle);
 extern uint32_t go_get_sync_index_mask(void *handle);
-extern void   go_set_command_buffers(void *handle, uint32_t num, const VkCommandBuffer *cmds);
+extern void   go_set_command_buffers(void *handle, uint32_t num, VkCommandBuffer *cmds);
 extern void   go_wait_sync_index(void *handle, unsigned index);
 extern void   go_lock_queue(void *handle);
 extern void   go_unlock_queue(void *handle);
 extern void   go_set_signal_semaphore(void *handle, VkSemaphore sem);
 
-// Build the runtime interface struct, wiring in the shim callbacks.
-static struct retro_hw_render_interface_vulkan make_vulkan_interface(
-    void          *handle,
+static void bridge_set_image(
+    void *handle,
+    const struct retro_vulkan_image *image,
+    uint32_t num_sems,
+    const VkSemaphore *sems,
+    uint32_t src_qf)
+{
+    go_set_image(handle, (struct retro_vulkan_image *)image, num_sems, (VkSemaphore *)sems, src_qf);
+}
+
+static void bridge_set_command_buffers(void *handle, uint32_t num, const VkCommandBuffer *cmds) {
+    go_set_command_buffers(handle, num, (VkCommandBuffer *)cmds);
+}
+
+// Build the runtime interface struct in caller-owned C memory, wiring in the
+// shim callbacks.
+static void init_vulkan_interface(
+    struct retro_hw_render_interface_vulkan *iface,
+    uintptr_t      handle,
     VkInstance     instance,
     VkPhysicalDevice gpu,
     VkDevice       device,
     VkQueue        queue,
     unsigned       queue_index)
 {
-    struct retro_hw_render_interface_vulkan iface = {0};
-    iface.interface_type    = RETRO_HW_RENDER_INTERFACE_VULKAN;
-    iface.interface_version = 1;
-    iface.handle            = handle;
-    iface.instance          = instance;
-    iface.gpu               = gpu;
-    iface.device            = device;
-    iface.queue             = queue;
-    iface.queue_index       = queue_index;
+    memset(iface, 0, sizeof(*iface));
+    iface->interface_type    = RETRO_HW_RENDER_INTERFACE_VULKAN;
+    iface->interface_version = 1;
+    iface->handle            = (void *)handle;
+    iface->instance          = instance;
+    iface->gpu               = gpu;
+    iface->device            = device;
+    iface->queue             = queue;
+    iface->queue_index       = queue_index;
 
-    iface.set_image              = go_set_image;
-    iface.get_sync_index         = go_get_sync_index;
-    iface.get_sync_index_mask    = go_get_sync_index_mask;
-    iface.set_command_buffers    = go_set_command_buffers;
-    iface.wait_sync_index        = go_wait_sync_index;
-    iface.lock_queue             = go_lock_queue;
-    iface.unlock_queue           = go_unlock_queue;
-    iface.set_signal_semaphore   = go_set_signal_semaphore;
-    return iface;
+    iface->set_image            = bridge_set_image;
+    iface->get_sync_index       = go_get_sync_index;
+    iface->get_sync_index_mask  = go_get_sync_index_mask;
+    iface->set_command_buffers  = bridge_set_command_buffers;
+    iface->wait_sync_index      = go_wait_sync_index;
+    iface->lock_queue           = go_lock_queue;
+    iface->unlock_queue         = go_unlock_queue;
+    iface->set_signal_semaphore = go_set_signal_semaphore;
 }
 */
 import "C"
 import (
 	"fmt"
+	"runtime/cgo"
 	"sync"
 	"unsafe"
 )
@@ -93,39 +110,31 @@ type Provider struct {
 	zeroCopy *ZeroCopyBuffer
 
 	// Interface struct we hand to the core via GET_HW_RENDER_INTERFACE.
-	iface C.struct_retro_hw_render_interface_vulkan
+	// Stored in C-owned memory because the libretro core retains this pointer.
+	iface *C.struct_retro_hw_render_interface_vulkan
+	handle cgo.Handle
 
 	// queueMu guards lock/unlock_queue calls.
 	queueMu sync.Mutex
 }
 
-// providerRegistry maps a *Provider (as unsafe.Pointer handle) to itself.
-// The libretro C callbacks carry this opaque handle back to us.
-var (
-	providersMu sync.RWMutex
-	providers   = map[unsafe.Pointer]*Provider{}
-)
-
-func registerProvider(p *Provider) unsafe.Pointer {
-	h := unsafe.Pointer(p)
-	providersMu.Lock()
-	providers[h] = p
-	providersMu.Unlock()
-	return h
+func registerProvider(p *Provider) C.uintptr_t {
+	p.handle = cgo.NewHandle(p)
+	return C.uintptr_t(p.handle)
 }
 
 func lookupProvider(handle unsafe.Pointer) *Provider {
-	providersMu.RLock()
-	p := providers[handle]
-	providersMu.RUnlock()
-	return p
+	if handle == nil {
+		return nil
+	}
+	return cgo.Handle(uintptr(handle)).Value().(*Provider)
 }
 
 func unregisterProvider(p *Provider) {
-	h := unsafe.Pointer(p)
-	providersMu.Lock()
-	delete(providers, h)
-	providersMu.Unlock()
+	if p.handle != 0 {
+		p.handle.Delete()
+		p.handle = 0
+	}
 }
 
 // NewProvider creates a Provider that wraps an existing Vulkan context.
@@ -140,10 +149,16 @@ func NewProvider(ctx *Context) (*Provider, error) {
 	}
 
 	handle := registerProvider(p)
+	p.iface = (*C.struct_retro_hw_render_interface_vulkan)(C.calloc(1, C.size_t(C.sizeof_struct_retro_hw_render_interface_vulkan)))
+	if p.iface == nil {
+		unregisterProvider(p)
+		return nil, fmt.Errorf("vulkan: failed to allocate interface struct")
+	}
 
 	// Build the interface struct that the core will query via
 	// RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE.
-	p.iface = C.make_vulkan_interface(
+	C.init_vulkan_interface(
+		p.iface,
 		handle,
 		ctx.Instance,
 		ctx.PhysDevice,
@@ -187,7 +202,7 @@ func (p *Provider) ZeroCopyBuffer() *ZeroCopyBuffer {
 // Interface returns a pointer to the retro_hw_render_interface_vulkan struct.
 // Pass this pointer to the core in response to GET_HW_RENDER_INTERFACE.
 func (p *Provider) Interface() *C.struct_retro_hw_render_interface_vulkan {
-	return &p.iface
+	return p.iface
 }
 
 // CurrentImage returns the most recently set VkImage and its layout, if any.
@@ -293,6 +308,10 @@ func (p *Provider) Destroy() {
 	if p.zeroCopy != nil {
 		p.zeroCopy.Destroy()
 		p.zeroCopy = nil
+	}
+	if p.iface != nil {
+		C.free(unsafe.Pointer(p.iface))
+		p.iface = nil
 	}
 }
 

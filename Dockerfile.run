@@ -1,0 +1,24 @@
+FROM localhost/cloudretro-phase3:latest
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb \
+    xserver-xorg-core \
+    xserver-xorg-video-dummy \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY xorg-dummy.conf /etc/X11/xorg.conf
+
+WORKDIR /usr/local/share/cloud-game
+
+CMD ["bash", "-c", "\
+Xorg :99 -config /etc/X11/xorg.conf -noreset +extension GLX +extension RANDR +extension RENDER & \
+sleep 2 && \
+./coordinator & \
+sleep 3 && \
+while true; do \
+  echo \"[worker-supervisor] Starting worker...\"; \
+  CLOUD_GAME_WEBRTC_SINGLEPORT=9754 ./worker; \
+  EXIT_CODE=$?; \
+  echo \"[worker-supervisor] Worker exited with code $EXIT_CODE, restarting in 3s...\"; \
+  sleep 3; \
+done"]

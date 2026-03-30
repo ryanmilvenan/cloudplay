@@ -2,14 +2,14 @@
 
 package vulkan
 
-/*
-#cgo LDFLAGS: -lvulkan
-#include <vulkan/vulkan.h>
-*/
-import "C"
 import (
 	"os"
 	"testing"
+)
+
+const (
+	vkMemoryPropertyHostVisibleBit = 0x00000002
+	vkMemoryPropertyHostCoherentBit = 0x00000004
 )
 
 // TestNewContext verifies that a headless Vulkan context can be created and
@@ -65,7 +65,7 @@ func TestFindMemoryType(t *testing.T) {
 	// real Vulkan device.
 	idx, err := ctx.findMemoryType(
 		0xFFFFFFFF,
-		C.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|C.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+		vkMemoryPropertyHostVisibleBit|vkMemoryPropertyHostCoherentBit,
 	)
 	if err != nil {
 		t.Fatalf("findMemoryType: %v", err)

@@ -872,6 +872,14 @@ func coreEnvironment(cmd C.unsigned, data unsafe.Pointer) C.bool {
 		Nan0.log.Debug().Msgf("Keyboard event callback was set")
 		Nan0.keyboardCb = (*C.struct_retro_keyboard_callback)(data)
 		return true
+	case C.RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE:
+		// The core provides a retro_hw_render_context_negotiation_interface_vulkan
+		// so it can participate in device creation (e.g. add required extensions).
+		// Delegate to Vulkan-specific handling.
+		return C.bool(handleSetHWRenderContextNegotiation(data))
+	case C.RETRO_ENVIRONMENT_GET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_SUPPORT:
+		// Indicate to the core which negotiation interface versions we support.
+		return C.bool(handleGetHWRenderContextNegotiationSupport(data))
 	}
 	return false
 }

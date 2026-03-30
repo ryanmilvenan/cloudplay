@@ -10,15 +10,18 @@ package vulkan
 #include <string.h>
 
 // ── C-callable shim functions that proxy back into Go ──────────────────────
-// These have the exact signatures required by the libretro Vulkan interface
+// These have the exact signatures required by the libretro Vulkan interface v5
 // and are registered as function pointers in the render interface struct.
+//
+// Phase 3 fix: wait_sync_index takes only (handle) — no index parameter.
+// The old signature go_wait_sync_index(handle, index) was wrong per the spec.
 
 extern void   go_set_image(void *handle, struct retro_vulkan_image *image,
                            uint32_t num_sems, VkSemaphore *sems, uint32_t src_qf);
 extern uint32_t go_get_sync_index(void *handle);
 extern uint32_t go_get_sync_index_mask(void *handle);
 extern void   go_set_command_buffers(void *handle, uint32_t num, VkCommandBuffer *cmds);
-extern void   go_wait_sync_index(void *handle, unsigned index);
+extern void   go_wait_sync_index(void *handle);
 extern void   go_lock_queue(void *handle);
 extern void   go_unlock_queue(void *handle);
 extern void   go_set_signal_semaphore(void *handle, VkSemaphore sem);
@@ -39,6 +42,10 @@ static void bridge_set_command_buffers(void *handle, uint32_t num, const VkComma
 
 // Build the runtime interface struct in caller-owned C memory, wiring in the
 // shim callbacks.
+//
+// Phase 3 fix: interface_version = RETRO_HW_RENDER_INTERFACE_VULKAN_VERSION (5).
+// Populate get_device_proc_addr and get_instance_proc_addr so Dolphin can
+// resolve additional Vulkan entry points without linking against libvulkan.
 static void init_vulkan_interface(
     struct retro_hw_render_interface_vulkan *iface,
     uintptr_t      handle,
@@ -50,11 +57,17 @@ static void init_vulkan_interface(
 {
     memset(iface, 0, sizeof(*iface));
     iface->interface_type    = RETRO_HW_RENDER_INTERFACE_VULKAN;
-    iface->interface_version = 1;
+    iface->interface_version = RETRO_HW_RENDER_INTERFACE_VULKAN_VERSION; // 5
     iface->handle            = (void *)handle;
     iface->instance          = instance;
     iface->gpu               = gpu;
     iface->device            = device;
+
+    // v5: proc-addr loaders must come before queue in the struct.
+    // Use the standard Vulkan loader entry points.
+    iface->get_device_proc_addr   = vkGetDeviceProcAddr;
+    iface->get_instance_proc_addr = vkGetInstanceProcAddr;
+
     iface->queue             = queue;
     iface->queue_index       = queue_index;
 
@@ -79,9 +92,10 @@ import (
 // ── Interface version constants (match libretro_vulkan.h) ─────────────────
 
 const (
-	RetroHWRenderInterfaceVulkan                    = 0
-	RetroHWRenderContextNegotiationInterfaceVulkan  = 0
-	NegotiationInterfaceVulkanVersion               = 1
+	RetroHWRenderInterfaceVulkan                   = 0
+	RetroHWRenderInterfaceVulkanVersion            = 5 // Phase 3 fix: was incorrectly 1
+	RetroHWRenderContextNegotiationInterfaceVulkan = 0
+	NegotiationInterfaceVulkanVersion              = 2
 )
 
 // ── Provider ──────────────────────────────────────────────────────────────
@@ -328,13 +342,13 @@ func go_set_image(handle unsafe.Pointer, image *C.struct_retro_vulkan_image,
 	p.mu.Lock()
 	p.currentImageView = image.image_view
 	p.currentLayout = image.image_layout
-	// Use the explicit image field if the core provided it (CloudPlay extension).
-	// Standard libretro cores will leave image.image as nil; ReadFrame handles
-	// that by returning a blank frame until Phase 2b wires up the core image.
-	p.currentImage = image.image
-	// The render dimensions are supplied by the caller of ReadFrame (nanoarch)
-	// via the w/h parameters from retro_system_av_info — we don't need to
-	// parse them out of the image view create_info here.
+	// Phase 3 fix: extract VkImage from VkImageViewCreateInfo.image.
+	// The standard libretro Vulkan spec requires the core to populate
+	// create_info.image with the underlying VkImage that was created by the
+	// core using the VkDevice we provided in the render interface.
+	// (The old CloudPlay-extension `image` field has been removed to match
+	// the real spec exactly and avoid struct-layout mismatches.)
+	p.currentImage = image.create_info.image
 	p.syncIndex = (p.syncIndex + 1) & 1
 	p.mu.Unlock()
 }
@@ -369,13 +383,13 @@ func go_set_command_buffers(handle unsafe.Pointer, num C.uint32_t, cmds *C.VkCom
 }
 
 //export go_wait_sync_index
-func go_wait_sync_index(handle unsafe.Pointer, index C.unsigned) {
+func go_wait_sync_index(handle unsafe.Pointer) {
 	p := lookupProvider(handle)
 	if p == nil {
 		return
 	}
-	// Wait for the device to be idle to guarantee the requested sync index
-	// is no longer in flight.  This is conservative but correct for Phase 2.
+	// Wait for the device to be idle to guarantee all in-flight work is done.
+	// Conservative but correct for Phase 2/3; revisit for pipeline parallelism.
 	C.vkDeviceWaitIdle(p.ctx.Device)
 }
 

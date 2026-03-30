@@ -40,6 +40,22 @@ static void bridge_set_command_buffers(void *handle, uint32_t num, const VkComma
     go_set_command_buffers(handle, num, (VkCommandBuffer *)cmds);
 }
 
+// Minimal dummy negotiation interface.
+// Populated with interface_type=0 (Vulkan), interface_version=0 so the core
+// knows we don't implement any useful negotiation callbacks. All callbacks are
+// NULL so well-behaved cores NULL-check before calling.
+// This is provided so iface->negotiation_interface is non-NULL and Dolphin's
+// context_reset doesn't crash dereferencing a NULL negotiation pointer.
+static struct retro_hw_render_context_negotiation_interface_vulkan g_dummy_neg = {
+    0,    // interface_type  = RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN (0)
+    0,    // interface_version = 0 (no callbacks implemented)
+    NULL, // get_application_info
+    NULL, // create_device
+    NULL, // destroy_device
+    NULL, // create_instance (v2)
+    NULL, // create_device2  (v2)
+};
+
 // Build the runtime interface struct in caller-owned C memory, wiring in the
 // shim callbacks.
 //
@@ -79,6 +95,11 @@ static void init_vulkan_interface(
     iface->lock_queue           = go_lock_queue;
     iface->unlock_queue         = go_unlock_queue;
     iface->set_signal_semaphore = go_set_signal_semaphore;
+
+    // Provide a non-NULL negotiation_interface so Dolphin's context_reset
+    // doesn't dereference a NULL pointer when it checks negotiation fields.
+    // All callbacks are NULL so cores NULL-check before calling.
+    iface->negotiation_interface = &g_dummy_neg;
 }
 */
 import "C"

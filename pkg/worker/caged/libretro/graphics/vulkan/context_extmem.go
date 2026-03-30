@@ -3,11 +3,12 @@
 package vulkan
 
 // deviceExtensionsForExternalMemory returns the Vulkan device-extension names
-// required for the Phase 3 zero-copy path (Vulkan external memory → CUDA).
+// for Phase 3 zero-copy (VK_KHR_external_memory_fd).
 //
-// These are requested in addition to any base extensions when building with
-// both the "linux" and "nvenc" tags, which is the only platform that supports
-// VK_KHR_external_memory_fd.
+// We keep this minimal because context.go falls back to NO extensions if any
+// in this list are unavailable.  The Dolphin-required rendering extensions are
+// handled via the negotiation interface (create_device2) where Dolphin itself
+// requests what it needs.
 func deviceExtensionsForExternalMemory() []string {
 	return []string{
 		"VK_KHR_external_memory",

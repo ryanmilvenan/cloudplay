@@ -122,6 +122,10 @@ type Context struct {
 	// successfully requested at device creation time.  When true the Phase 3
 	// zero-copy export path is available.
 	ExternalMemoryEnabled bool
+
+	// externalHandles is true when instance/device were created externally
+	// (e.g. by the core via negotiation).  Destroy() will skip destroying them.
+	externalHandles bool
 }
 
 // NewContext creates a headless Vulkan context.
@@ -229,12 +233,108 @@ func NewContext() (*Context, error) {
 	return ctx, nil
 }
 
+// InstanceOnlyContext holds a VkInstance + VkPhysicalDevice for use before
+// the device is created by the core via negotiation.
+type InstanceOnlyContext struct {
+	instance   C.VkInstance
+	physDevice C.VkPhysicalDevice
+}
+
+// NewInstanceOnly creates a VkInstance and picks a physical device, but does
+// NOT create a VkDevice.  Use when the core will create the device itself via
+// the negotiation interface.
+func NewInstanceOnly() (*InstanceOnlyContext, error) {
+	ctx := &InstanceOnlyContext{}
+
+	appName := C.CString("cloudplay")
+	engName := C.CString("libretro-vulkan")
+	defer C.free(unsafe.Pointer(appName))
+	defer C.free(unsafe.Pointer(engName))
+
+	if res := C.cloudplay_vk_create_instance(appName, engName, &ctx.instance); res != C.VK_SUCCESS {
+		return nil, fmt.Errorf("vulkan: vkCreateInstance failed: %d", int(res))
+	}
+
+	ctx.physDevice = C.pick_physical_device(ctx.instance)
+	if ctx.physDevice == nil {
+		C.vkDestroyInstance(ctx.instance, nil)
+		return nil, errors.New("vulkan: no physical device found")
+	}
+
+	return ctx, nil
+}
+
+// VkInstancePtr returns the VkInstance handle as unsafe.Pointer for cross-package use.
+func (c *InstanceOnlyContext) VkInstancePtr() unsafe.Pointer { return unsafe.Pointer(c.instance) }
+
+// VkPhysDevicePtr returns the VkPhysicalDevice handle as unsafe.Pointer for cross-package use.
+func (c *InstanceOnlyContext) VkPhysDevicePtr() unsafe.Pointer { return unsafe.Pointer(c.physDevice) }
+
+// DestroyInstanceOnly frees the VkInstance.
+// Should be called only if device creation fails (i.e. the instance won't be
+// handed to a Context via NewContextFromHandles).
+func (c *InstanceOnlyContext) DestroyInstanceOnly() {
+	if c.instance != nil {
+		C.vkDestroyInstance(c.instance, nil)
+		c.instance = nil
+	}
+}
+
+// NewContextFromHandles creates a Context that wraps externally-created
+// Vulkan handles (e.g. created by the core via the negotiation interface).
+//
+// The caller is responsible for ensuring the handles are valid and that they
+// outlive the returned Context.  The caller must NOT destroy these handles
+// through normal Context.Destroy() — only the CmdPool will be destroyed.
+//
+// Use this when the core (e.g. Dolphin) creates its own VkDevice via the
+// RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN callbacks.
+func NewContextFromHandles(
+	instance C.VkInstance,
+	physDevice C.VkPhysicalDevice,
+	device C.VkDevice,
+	queue C.VkQueue,
+	queueFamily uint32,
+) (*Context, error) {
+	ctx := &Context{
+		Instance:    instance,
+		PhysDevice:  physDevice,
+		Device:      device,
+		Queue:       queue,
+		QueueFamily: queueFamily,
+	}
+	// Cache memory properties.
+	C.vkGetPhysicalDeviceMemoryProperties(physDevice, &ctx.MemProps)
+
+	// Create command pool.
+	poolInfo := C.VkCommandPoolCreateInfo{
+		sType:            C.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+		queueFamilyIndex: C.uint32_t(queueFamily),
+		flags:            C.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+	}
+	if res := C.vkCreateCommandPool(ctx.Device, &poolInfo, nil, &ctx.CmdPool); res != C.VK_SUCCESS {
+		return nil, fmt.Errorf("vulkan: NewContextFromHandles: vkCreateCommandPool failed: %d", int(res))
+	}
+	// Mark as external so Destroy() doesn't destroy the device/instance.
+	ctx.externalHandles = true
+	return ctx, nil
+}
+
 // Destroy releases all Vulkan resources owned by this context.
 // Must be called after all dependent resources (images, buffers) are destroyed.
+// When externalHandles is true (context created via NewContextFromHandles),
+// only the command pool is destroyed; the device and instance are left intact
+// since they are owned by the caller (core).
 func (c *Context) Destroy() {
 	if c.CmdPool != nil {
 		C.vkDestroyCommandPool(c.Device, c.CmdPool, nil)
 		c.CmdPool = nil
+	}
+	if c.externalHandles {
+		// Device and instance are owned by the core; don't destroy them.
+		c.Device = nil
+		c.Instance = nil
+		return
 	}
 	if c.Device != nil {
 		C.vkDestroyDevice(c.Device, nil)

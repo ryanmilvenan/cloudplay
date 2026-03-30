@@ -123,15 +123,9 @@ func (fc *FrameCapture) Destroy() {
 // The returned slice is a view into the persistently-mapped buffer; copy it
 // before the next call if you need to retain the data.
 //
-// Waits for the queue to be idle before submitting the copy command to ensure
-// the core's rendering has completed before we read back the pixels.
+// Ordering is guaranteed by the pipeline barrier in the command buffer (see
+// transition_image_layout below) — no queue-wide stall needed here.
 func (fc *FrameCapture) Readback(srcImage C.VkImage, currentLayout C.VkImageLayout) ([]byte, error) {
-	// Wait for any in-flight rendering to complete before reading back.
-	// This ensures we see the completed frame, not partial rendering.
-	if res := C.vkQueueWaitIdle(fc.ctx.Queue); res != C.VK_SUCCESS {
-		return nil, fmt.Errorf("vulkan: framecapture: vkQueueWaitIdle: %d", int(res))
-	}
-
 	cmd, err := fc.ctx.beginOneShot()
 	if err != nil {
 		return nil, err

@@ -32,3 +32,11 @@ func deinitVulkanVideo() {}
 // readVulkanFramebuffer returns a zeroed frame; should never be called on
 // non-Vulkan builds since Nan0.vulkan.enabled is always false.
 func readVulkanFramebuffer(size, _, _ uint) []byte { return make([]byte, size) }
+
+// vulkanZeroCopyFd always returns -1 on non-Vulkan builds.
+func vulkanZeroCopyFd(_, _ uint) (int, error) {
+	return -1, nil
+}
+
+// IsZeroCopyAvailable always returns false on non-Vulkan builds.
+func (n *Nanoarch) IsZeroCopyAvailable() bool { return false }

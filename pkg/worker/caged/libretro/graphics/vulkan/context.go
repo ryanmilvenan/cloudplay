@@ -69,10 +69,20 @@ type Context struct {
 
 	// Device memory properties cached for allocation helpers.
 	MemProps C.VkPhysicalDeviceMemoryProperties
+
+	// ExternalMemoryEnabled indicates that VK_KHR_external_memory_fd was
+	// successfully requested at device creation time.  When true the Phase 3
+	// zero-copy export path is available.
+	ExternalMemoryEnabled bool
 }
 
 // NewContext creates a headless Vulkan context.
 // No surface extensions are requested — pure compute/render.
+//
+// Optional device extensions (e.g. VK_KHR_external_memory_fd for Phase 3) are
+// requested via deviceExtensionsForExternalMemory().  On platforms where those
+// extensions are unavailable the call succeeds with a baseline device, and
+// Context.ExternalMemoryEnabled is false.
 func NewContext() (*Context, error) {
 	ctx := &Context{}
 
@@ -133,9 +143,41 @@ func NewContext() (*Context, error) {
 		pQueueCreateInfos:    &queueInfo,
 	}
 
-	if res := C.vkCreateDevice(ctx.PhysDevice, &deviceInfo, nil, &ctx.Device); res != C.VK_SUCCESS {
-		C.vkDestroyInstance(ctx.Instance, nil)
-		return nil, fmt.Errorf("vulkan: vkCreateDevice failed: %d", int(res))
+	// Request optional Phase 3 extensions (VK_KHR_external_memory_fd on
+	// linux+nvenc builds).  We first try with the extensions enabled; if the
+	// driver rejects them we fall back to a baseline device.
+	extNames := deviceExtensionsForExternalMemory()
+	if len(extNames) > 0 {
+		cExts := make([]*C.char, len(extNames))
+		for i, e := range extNames {
+			cExts[i] = C.CString(e)
+		}
+		deviceInfo.enabledExtensionCount = C.uint32_t(len(cExts))
+		deviceInfo.ppEnabledExtensionNames = &cExts[0]
+
+		if res := C.vkCreateDevice(ctx.PhysDevice, &deviceInfo, nil, &ctx.Device); res == C.VK_SUCCESS {
+			ctx.ExternalMemoryEnabled = true
+		} else {
+			// Extension(s) not supported on this driver — retry without them.
+			deviceInfo.enabledExtensionCount = 0
+			deviceInfo.ppEnabledExtensionNames = nil
+			if res2 := C.vkCreateDevice(ctx.PhysDevice, &deviceInfo, nil, &ctx.Device); res2 != C.VK_SUCCESS {
+				for _, p := range cExts {
+					C.free(unsafe.Pointer(p))
+				}
+				C.vkDestroyInstance(ctx.Instance, nil)
+				return nil, fmt.Errorf("vulkan: vkCreateDevice failed: %d", int(res2))
+			}
+			// ExternalMemoryEnabled stays false.
+		}
+		for _, p := range cExts {
+			C.free(unsafe.Pointer(p))
+		}
+	} else {
+		if res := C.vkCreateDevice(ctx.PhysDevice, &deviceInfo, nil, &ctx.Device); res != C.VK_SUCCESS {
+			C.vkDestroyInstance(ctx.Instance, nil)
+			return nil, fmt.Errorf("vulkan: vkCreateDevice failed: %d", int(res))
+		}
 	}
 
 	// Retrieve the graphics queue handle.

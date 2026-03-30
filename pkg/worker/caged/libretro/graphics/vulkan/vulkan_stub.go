@@ -29,3 +29,5 @@ func (v *VulkanContext) ReadFramebuffer(size, w, h uint) []byte { return make([]
 func (v *VulkanContext) RenderInterface() unsafe.Pointer        { return nil }
 func (v *VulkanContext) Deinit() error                          { return nil }
 func (v *VulkanContext) IsVulkan() bool                         { return false }
+func (v *VulkanContext) ZeroCopyFd(_, _ uint) (int, error)      { return -1, ErrUnsupported }
+func (v *VulkanContext) IsZeroCopyAvailable() bool              { return false }

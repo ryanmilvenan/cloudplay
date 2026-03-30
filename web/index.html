@@ -28,6 +28,11 @@
         <div id="game-list-screen" class="loading">
             <div id="game-list-title">SELECT A GAME</div>
             <div id="game-list-container"></div>
+            <!-- Recovery button: visible only during "Connecting..." state (.loading).
+                 Hides automatically once the game list populates. -->
+            <button id="orphan-recover-btn" class="orphan-recover-btn" title="Close this session and start fresh">
+                ↺ Session stuck? Try again
+            </button>
         </div>
         <!-- kept for JS compat -->
         <div id="menu-container" style="display:none"></div>

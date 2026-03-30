@@ -639,6 +639,50 @@ sub(SETTINGS_CHANGED, () => {
     log.level = s[opts.LOG_LEVEL];
 });
 
+// ── Orphaned-session recovery button ──
+// Hidden for the first ORPHAN_DELAY_MS so normal fast connections don't flash it.
+// After the delay, if still in "Connecting..." (.loading), it becomes visible.
+// Disappears permanently once the game list populates (loading class is removed).
+// Clicking reloads without a room ID so coordinator assigns a fresh worker.
+(function initOrphanRecover() {
+    const ORPHAN_DELAY_MS = 6000;
+    const btn = document.getElementById('orphan-recover-btn');
+    if (!btn) return;
+
+    // Start hidden via inline style (overrides the CSS .loading rule during grace period)
+    btn.style.display = 'none';
+
+    const screenEl = document.getElementById('game-list-screen');
+
+    // After delay, reveal if still in connecting state
+    const showTimer = setTimeout(() => {
+        if (screenEl && screenEl.classList.contains('loading')) {
+            btn.style.removeProperty('display'); // let CSS .loading rule take effect → display:block
+        }
+    }, ORPHAN_DELAY_MS);
+
+    // Hide permanently once game list loads (loading class removed from parent)
+    const observer = new MutationObserver(() => {
+        if (!screenEl.classList.contains('loading')) {
+            clearTimeout(showTimer);
+            btn.style.display = 'none';
+            observer.disconnect();
+        }
+    });
+    if (screenEl) {
+        observer.observe(screenEl, {attributes: true, attributeFilter: ['class']});
+    }
+
+    btn.addEventListener('click', () => {
+        // Clear any stored room ID so we reconnect fresh (no stale room join)
+        try { localStorage.removeItem('roomID'); } catch (_) {}
+        // Navigate to clean URL (no ?id= param) — browser closes the WS on unload,
+        // which causes coordinator to RemoveDisconnect and release the worker association.
+        const cleanUrl = window.location.origin + window.location.pathname;
+        window.location.replace(cleanUrl);
+    });
+})();
+
 // initial app state
 setState(app.state.eden);
 

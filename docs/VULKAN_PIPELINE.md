@@ -162,17 +162,89 @@ pkg/
 - Frame readback via staging buffer
 - **Result: No X server dependency**
 
-### Phase 3: Zero-Copy Pipeline
+### Phase 3: Zero-Copy Pipeline ✅ (scaffold landed; CUDA interop TODO)
 - Vulkan external memory → CUDA → NVENC
 - Eliminate CPU-side frame copies
 - **Result: Minimal latency, minimal GPU overhead**
+- See **Phase 3 implementation status** section below for details.
+
+## Phase 3 Implementation Status
+
+### What is implemented (this commit)
+
+```
+pkg/worker/caged/libretro/graphics/vulkan/
+  context.go              — extended to request VK_KHR_external_memory[_fd] at
+                            device creation; graceful fallback if unsupported;
+                            Context.ExternalMemoryEnabled flag
+  context_extmem.go       — (linux+vulkan+nvenc) device ext name list
+  context_extmem_stub.go  — (other platforms) returns nil
+  zerocopy.go             — (linux+vulkan+nvenc) ZeroCopyBuffer: device-local
+                            exportable VkBuffer, BlitFrom (GPU→GPU copy),
+                            ExportMemoryFd (vkGetMemoryFdKHR)
+  zerocopy_stub.go        — (other platforms) stub types + error returns
+  provider.go             — ensureZeroCopy (lazy alloc), ReadFrameZeroCopy
+                            (blit + fd export), ZeroCopyBuffer() accessor;
+                            Phase 2 staging readback kept as fallback
+  vulkan.go               — ZeroCopyFd(), IsZeroCopyAvailable() on VulkanContext
+
+pkg/worker/caged/libretro/nanoarch/
+  nanoarch_vulkan.go      — vulkanZeroCopyFd(), Nanoarch.IsZeroCopyAvailable()
+  nanoarch_novulkan.go    — stubs for the above
+
+pkg/encoder/nvenc/
+  nvenc_cuda.go           — (nvenc+linux) ImportExternalMemory (CUDA fd import
+                            via cuImportExternalMemory + cuExternalMemoryGetMappedBuffer),
+                            NVENC.EncodeFromDevPtr (GPU-only encode hot path)
+  nvenc_cuda_stub.go      — (other platforms) stub returns errors
+```
+
+### What remains (TODOs for Phase 3b / 3c)
+
+1. **CUDA external-memory handle lifetime** — `cuda_import_external_memory`
+   currently leaks the `CUexternalMemory` handle.  Wrap it and expose a
+   release function tied to `ZeroCopyBuffer.Destroy()`.
+
+2. **RGBA→NV12 GPU conversion** — `nvenc_encode_devptr` currently uses a raw
+   `cuMemcpyDtoD` into the hw_frame surface.  Replace with an NPP call
+   (`nppiRGBToYCbCr420_8u_P3R`) or a custom CUDA kernel for correct colourspace
+   conversion before NVENC sees the data.
+
+3. **Command buffer injection** — `go_set_command_buffers` still ignores the
+   core's command buffers.  For a truly pipelined zero-copy path, append the
+   `vkCmdCopyImageToBuffer` blit directly into the core's render command stream
+   rather than using a separate one-shot submission.
+
+4. **Semaphore / synchronisation** — `go_set_signal_semaphore` is a no-op.
+   Wire in a VkSemaphore so the host and core submission are properly ordered
+   without the conservative `vkDeviceWaitIdle` / `vkQueueWaitIdle` calls.
+
+5. **Media pipeline selection** — `media.go` and `frontend.go` currently always
+   call `ReadFramebuffer` (CPU path).  Add a `UseZeroCopy` branch that calls
+   `vulkanZeroCopyFd()` + `ImportExternalMemory()` + `EncodeFromDevPtr()` when
+   `nano.IsZeroCopyAvailable()` returns true.
+
+6. **Config flag** — expose a `worker.video.zero_copy` boolean config option to
+   gate Phase 3 on/off at runtime.
+
+### Build tags
+
+| Tag combination            | Behaviour                                        |
+|----------------------------|--------------------------------------------------|
+| (default)                  | Phase 1 x264 + GL readback                       |
+| `nvenc`                    | Phase 1 NVENC + GL readback                      |
+| `vulkan`                   | Phase 2 Vulkan readback (CPU staging buffer)     |
+| `vulkan nvenc`             | Phase 2 Vulkan + NVENC; external-mem not enabled |
+| `vulkan nvenc` on Linux    | Phase 3 scaffold active; ext-mem requested;      |
+|                            | zero-copy blit runs if driver supports it;        |
+|                            | `EncodeFromDevPtr` path available                 |
 
 ## Dependencies
 
 - Vulkan SDK headers (vulkan/vulkan.h)
 - NVIDIA driver 470+ (Vulkan + NVENC support)
 - FFmpeg with `--enable-nvenc` (for Phase 1)
-- NVIDIA Video Codec SDK headers (for direct NVENC, Phase 3)
+- CUDA toolkit headers + libcuda (for Phase 3 `nvenc_cuda.go`)
 
 ## Notes
 

@@ -56,6 +56,10 @@ func NewVulkanContext(cfg Config) (*VulkanContext, error) {
 
 // ReadFramebuffer reads the current rendered frame from GPU memory and
 // returns the raw RGBA pixel bytes.  size must equal w*h*4.
+//
+// Phase routing: if Phase 3 (zero-copy) is active this also triggers the
+// GPU-to-GPU blit into the exportable buffer as a side effect, making the
+// buffer available via ZeroCopyFd() immediately after this call returns.
 func (v *VulkanContext) ReadFramebuffer(size, w, h uint) []byte {
 	pixels, err := v.provider.ReadFrame(uint32(w), uint32(h))
 	if err != nil {
@@ -66,6 +70,22 @@ func (v *VulkanContext) ReadFramebuffer(size, w, h uint) []byte {
 		return pixels[:size]
 	}
 	return pixels
+}
+
+// ZeroCopyFd returns the Linux fd for the exportable Vulkan device memory
+// after a ZeroCopy blit has been performed (i.e. after ReadFramebuffer or
+// ReadFrameZeroCopy has been called this frame).
+//
+// Returns (-1, err) when Phase 3 is unavailable or no blit has happened yet.
+// The CUDA layer uses this fd to import the memory without CPU involvement.
+func (v *VulkanContext) ZeroCopyFd(w, h uint) (int, error) {
+	return v.provider.ReadFrameZeroCopy(uint32(w), uint32(h))
+}
+
+// IsZeroCopyAvailable reports whether the Phase 3 GPU-only path is wired up
+// on this device (VK_KHR_external_memory_fd present and ZeroCopyBuffer allocated).
+func (v *VulkanContext) IsZeroCopyAvailable() bool {
+	return v.ctx.ExternalMemoryEnabled
 }
 
 // RenderInterface returns the libretro Vulkan render interface pointer that

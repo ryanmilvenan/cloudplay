@@ -128,9 +128,35 @@ func deinitVulkanVideo() {
 // memory and returns the raw pixel bytes.
 // Called from coreVideoRefresh when data == RETRO_HW_FRAME_BUFFER_VALID and
 // Vulkan is active.
+//
+// Phase 3 behaviour: if the device supports VK_KHR_external_memory_fd, this
+// call also performs the GPU-to-GPU blit into the exportable ZeroCopyBuffer.
+// nanoarch can then call vulkanZeroCopyFd() to retrieve the fd for CUDA import
+// without going through the CPU-side []byte path.
 func readVulkanFramebuffer(size, w, h uint) []byte {
 	if Nan0.vulkan.ctx == nil {
 		return make([]byte, size)
 	}
 	return Nan0.vulkan.ctx.ReadFramebuffer(size, w, h)
+}
+
+// vulkanZeroCopyFd returns the Linux fd for the current frame's exportable
+// Vulkan device memory after readVulkanFramebuffer has been called.
+//
+// Returns (-1, err) when Phase 3 is not available.
+// Used by the media pipeline to drive NVENC via CUDA without CPU copies.
+func vulkanZeroCopyFd(w, h uint) (int, error) {
+	if Nan0.vulkan.ctx == nil {
+		return -1, fmt.Errorf("vulkan: context not initialised")
+	}
+	return Nan0.vulkan.ctx.ZeroCopyFd(w, h)
+}
+
+// IsZeroCopyAvailable reports whether Phase 3 GPU-only encoding is available
+// for this session (device supports VK_KHR_external_memory_fd).
+func (n *Nanoarch) IsZeroCopyAvailable() bool {
+	if n.vulkan.ctx == nil {
+		return false
+	}
+	return n.vulkan.ctx.IsZeroCopyAvailable()
 }

@@ -54,6 +54,7 @@ static struct retro_hw_render_interface_vulkan make_vulkan_interface(
 */
 import "C"
 import (
+	"fmt"
 	"sync"
 	"unsafe"
 )
@@ -83,8 +84,13 @@ type Provider struct {
 	// syncIndex cycles between 0 and 1 (double buffer).
 	syncIndex uint32
 
-	// frameCapture is created on-demand when the first image arrives.
+	// frameCapture is created on-demand when the first image arrives (Phase 2).
 	fc *FrameCapture
+
+	// zeroCopy is the Phase 3 exportable device-local buffer.
+	// Non-nil only when ctx.ExternalMemoryEnabled is true and the buffer has
+	// been successfully allocated.  ReadFrameZeroCopy uses this path.
+	zeroCopy *ZeroCopyBuffer
 
 	// Interface struct we hand to the core via GET_HW_RENDER_INTERFACE.
 	iface C.struct_retro_hw_render_interface_vulkan
@@ -123,6 +129,10 @@ func unregisterProvider(p *Provider) {
 }
 
 // NewProvider creates a Provider that wraps an existing Vulkan context.
+//
+// If ctx.ExternalMemoryEnabled is true the provider will allocate a Phase 3
+// ZeroCopyBuffer at first use (deferred until the render dimensions are known
+// in ReadFrame).  The Phase 2 staging-buffer path is kept as fallback.
 func NewProvider(ctx *Context) (*Provider, error) {
 	p := &Provider{
 		ctx:           ctx,
@@ -145,6 +155,35 @@ func NewProvider(ctx *Context) (*Provider, error) {
 	return p, nil
 }
 
+// zeroCopyAvailable reports whether the Phase 3 path can be used.
+func (p *Provider) zeroCopyAvailable() bool {
+	return p.ctx.ExternalMemoryEnabled
+}
+
+// ensureZeroCopy allocates (or re-allocates) the ZeroCopyBuffer when the
+// render dimensions are known.  It is called lazily from ReadFrameZeroCopy.
+func (p *Provider) ensureZeroCopy(w, h uint32) error {
+	if p.zeroCopy != nil && p.zeroCopy.width == w && p.zeroCopy.height == h {
+		return nil // already allocated for this size
+	}
+	if p.zeroCopy != nil {
+		p.zeroCopy.Destroy()
+		p.zeroCopy = nil
+	}
+	zc, err := NewZeroCopyBuffer(p.ctx, w, h)
+	if err != nil {
+		return err
+	}
+	p.zeroCopy = zc
+	return nil
+}
+
+// ZeroCopyBuffer returns the underlying ZeroCopyBuffer if Phase 3 is active,
+// or nil otherwise.  Used by nanoarch to wire the fd into the CUDA encoder.
+func (p *Provider) ZeroCopyBuffer() *ZeroCopyBuffer {
+	return p.zeroCopy
+}
+
 // Interface returns a pointer to the retro_hw_render_interface_vulkan struct.
 // Pass this pointer to the core in response to GET_HW_RENDER_INTERFACE.
 func (p *Provider) Interface() *C.struct_retro_hw_render_interface_vulkan {
@@ -160,6 +199,14 @@ func (p *Provider) CurrentImage() (img C.VkImage, layout C.VkImageLayout, view C
 
 // ReadFrame copies the current rendered frame to CPU memory and returns RGBA bytes.
 // w and h must match the actual rendered dimensions.
+//
+// Phase routing:
+//   - If Phase 3 (zero-copy) is available, ReadFrameZeroCopy is called instead and
+//     the blitted GPU buffer fd is made available for CUDA import; ReadFrame itself
+//     still returns a CPU copy for callers that need []byte (e.g. software path).
+//     In a fully wired Phase 3 deployment the caller should skip ReadFrame entirely
+//     and drive encoding via ZeroCopyBuffer.ExportMemoryFd().
+//   - Otherwise falls through to the Phase 2 staging-buffer readback.
 func (p *Provider) ReadFrame(w, h uint32) ([]byte, error) {
 	p.mu.Lock()
 	img := p.currentImage
@@ -172,7 +219,20 @@ func (p *Provider) ReadFrame(w, h uint32) ([]byte, error) {
 		return make([]byte, size), nil
 	}
 
-	// Lazily create (or recreate on resize) the frame capture helper.
+	// Phase 3 path: blit into exportable device-local buffer.
+	// We still return a CPU copy from the Phase 2 staging buffer so existing
+	// callers keep working.  Full Phase 3 callers should use ZeroCopyBuffer()
+	// directly and bypass ReadFrame.
+	if p.zeroCopyAvailable() {
+		if err := p.ensureZeroCopy(w, h); err == nil {
+			// GPU-to-GPU blit into exportable buffer (no CPU copy here).
+			// Errors are non-fatal — fall through to Phase 2 on failure.
+			_ = p.zeroCopy.BlitFrom(img, layout)
+		}
+	}
+
+	// Phase 2 path: CPU readback via staging buffer (kept as fallback / for
+	// callers that still need []byte pixel data).
 	if p.fc == nil || p.fc.width != w || p.fc.height != h {
 		if p.fc != nil {
 			p.fc.Destroy()
@@ -187,12 +247,52 @@ func (p *Provider) ReadFrame(w, h uint32) ([]byte, error) {
 	return p.fc.Readback(img, layout)
 }
 
+// ReadFrameZeroCopy performs the Phase 3 GPU-to-GPU blit into the exportable
+// buffer and returns the buffer's fd for CUDA import.  It does NOT copy pixels
+// to the CPU.
+//
+// Returns (-1, err) if Phase 3 is unavailable or the blit fails.
+//
+// Typical call flow (nanoarch_vulkan.go, Phase 3 fully wired):
+//
+//	fd, err := provider.ReadFrameZeroCopy(w, h)
+//	// → CUDA: cuMemImportFromShareableHandle(fd)
+//	// → NVENC: nvenc.EncodeFromDevPtr(cudaPtr, size)
+func (p *Provider) ReadFrameZeroCopy(w, h uint32) (fd int, err error) {
+	if !p.zeroCopyAvailable() {
+		return -1, fmt.Errorf("zerocopy: not available on this device")
+	}
+
+	p.mu.Lock()
+	img := p.currentImage
+	layout := p.currentLayout
+	p.mu.Unlock()
+
+	if img == nil {
+		return -1, fmt.Errorf("zerocopy: no current image")
+	}
+
+	if err = p.ensureZeroCopy(w, h); err != nil {
+		return -1, err
+	}
+
+	if err = p.zeroCopy.BlitFrom(img, layout); err != nil {
+		return -1, err
+	}
+
+	return p.zeroCopy.ExportMemoryFd()
+}
+
 // Destroy cleans up the provider and its frame capture resources.
 func (p *Provider) Destroy() {
 	unregisterProvider(p)
 	if p.fc != nil {
 		p.fc.Destroy()
 		p.fc = nil
+	}
+	if p.zeroCopy != nil {
+		p.zeroCopy.Destroy()
+		p.zeroCopy = nil
 	}
 }
 
@@ -240,8 +340,13 @@ func go_get_sync_index_mask(handle unsafe.Pointer) C.uint32_t {
 
 //export go_set_command_buffers
 func go_set_command_buffers(handle unsafe.Pointer, num C.uint32_t, cmds *C.VkCommandBuffer) {
-	// Phase 2: we don't schedule additional work into the core's command
-	// stream yet — that's Phase 3 (zero-copy).  Accept but ignore.
+	// Phase 3 TODO: In the final zero-copy path the core provides its render
+	// command buffers here so the host can append blit-to-zerocopy commands
+	// before submission.  For now we accept without injecting extra work;
+	// the BlitFrom call in ReadFrameZeroCopy uses a separate one-shot command
+	// buffer submitted after the core has finished rendering.
+	_ = num
+	_ = cmds
 }
 
 //export go_wait_sync_index

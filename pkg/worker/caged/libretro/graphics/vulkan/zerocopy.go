@@ -22,17 +22,17 @@ package vulkan
 //        AVFrame with a custom data pointer set to a CUDA device address,
 //        bypassing all CPU-side data movement.
 //
-// Current state
-// ─────────────
+// Current state (Phase 3c)
+// ─────────────────────────
 //  • Steps 1 and 2a (VkBuffer allocation + vkCmdCopyImageToBuffer) are fully
 //    implemented here.
-//  • The fd export stub (ExportMemoryFd) calls vkGetMemoryFdKHR and returns
-//    the raw Linux fd so the CUDA layer can import it.
-//  • Steps 2c-2d (CUDA import + NvencEncodeFromDevPtr) live in
-//    pkg/encoder/nvenc/nvenc_cuda.go and are wired up from provider.go when
-//    the ZeroCopyBuffer is available.
-//  • TODO: resolve CUDA handle import lifetime and synchronisation (see
-//    zerocopy TODO below).
+//  • The fd export (ExportMemoryFd) calls vkGetMemoryFdKHR and returns the
+//    Linux fd so the CUDA layer can import it.
+//  • Steps 2c-2d (CUDA import + EncodeFromDevPtr) live in
+//    pkg/encoder/nvenc/nvenc_cuda.go; the CUexternalMemory lifetime is now
+//    tracked via nvenc.ExtMemHandle and released on session teardown.
+//  • GPU RGBA→NV12 colour conversion (Phase 3c): two embedded PTX kernels
+//    (BT.601 studio-swing) are JIT-compiled at first use; no nvcc needed.
 
 /*
 #cgo LDFLAGS: -lvulkan
@@ -231,8 +231,11 @@ func (zc *ZeroCopyBuffer) BlitFrom(srcImage C.VkImage, layout C.VkImageLayout) e
 // The caller owns the fd on first call; subsequent calls return the same
 // cached value (CUDA keeps the mapping alive via the import handle).
 //
-// TODO(phase3): document fd lifetime and close semantics once the CUDA
-// import path is wired end-to-end.
+// Phase 3c: the fd is owned by this ZeroCopyBuffer.  CUDA imports it via
+// cuImportExternalMemory (which dup()s the fd internally on Linux), so this
+// fd can be closed after import.  The ExtMemHandle returned by
+// nvenc.ImportExternalMemory must be released via nvenc.ReleaseExternalMemory
+// when the session ends (handled by lazyZeroCopyNVENC.Destroy).
 func (zc *ZeroCopyBuffer) ExportMemoryFd() (int, error) {
 	if zc.memFd >= 0 {
 		return zc.memFd, nil

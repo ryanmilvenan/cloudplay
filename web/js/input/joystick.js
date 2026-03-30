@@ -274,6 +274,9 @@ sub(DPAD_TOGGLE, (data) => onDpadToggle(data.checked));
  * @version 1
  */
 export const joystick = {
+    // setSystem: optional hook used by v5+ app.js to hint per-system button maps.
+    // Stubbed here so mixed web volumes don't crash with "setSystem is not a function".
+    setSystem: (_system) => { /* no-op for Phase 3 */ },
     init: () => {
         // we only capture the last plugged joystick
         window.addEventListener('gamepadconnected', onGamepadConnected);

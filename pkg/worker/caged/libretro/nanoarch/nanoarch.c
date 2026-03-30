@@ -1,5 +1,6 @@
 #include "libretro.h"
 #include <pthread.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -327,6 +328,18 @@ static pthread_t thread;
 mutex_t run_mutex, done_mutex;
 
 void *run_loop(void *unused) {
+    // Unblock SIGBUS and SIGSEGV so that Dolphin's JIT fastmem signal
+    // handlers can handle memory-mapped access faults in GameCube emulation.
+    // Without this, Go's runtime (which manages signal dispositions for all
+    // threads in the process) may intercept these signals and panic instead
+    // of forwarding them to Dolphin's registered sigaction handler.
+    {
+        sigset_t unblock;
+        sigemptyset(&unblock);
+        sigaddset(&unblock, SIGBUS);
+        sigaddset(&unblock, SIGSEGV);
+        pthread_sigmask(SIG_UNBLOCK, &unblock, NULL);
+    }
     core_log_cgo(RETRO_LOG_DEBUG, "UnLibCo run loop start\n");
     mutex_lock(&done_mutex);
     mutex_lock(&run_mutex);

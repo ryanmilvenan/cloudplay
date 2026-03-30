@@ -22,6 +22,27 @@ import (
 #include "libretro.h"
 #include "nanoarch.h"
 #include <stdlib.h>
+#include <signal.h>
+#include <pthread.h>
+
+// nanoarch_init_sigbus allows SIGBUS to pass through Go's runtime to C
+// signal handlers (e.g. Dolphin's fastmem handler).
+//
+// Go's runtime intercepts SIGBUS before C handlers when the signal originates
+// in CGo-executed C code (e.g. JIT-compiled GC game code). By resetting
+// SIGBUS to SIG_DFL BEFORE Dolphin installs its own handler, Dolphin's
+// sigaction will be registered first and Go will forward unhandled SIGBUS
+// signals to it.
+//
+// This is called from CoreLoad, before retro_init which is where Dolphin
+// registers its fastmem SIGBUS handler.
+static void nanoarch_allow_cgo_sigbus(void) {
+    // Unblock SIGBUS for the current thread so it can reach C handlers.
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGBUS);
+    pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+}
 */
 import "C"
 
@@ -189,6 +210,12 @@ func (n *Nanoarch) CoreLoad(meta Metadata) {
 	n.Aspect = meta.CoreAspectRatio
 	n.Video.gl.autoCtx = meta.AutoGlContext
 	n.Video.gl.enabled = meta.IsGlAllowed
+
+	// Unblock SIGBUS so that C code (e.g. Dolphin's JIT fastmem handler) can
+	// install and use its own SIGBUS handler.  Without this, Go's runtime
+	// intercepts SIGBUS caused by Dolphin's memory-mapped JIT regions and
+	// terminates the process instead of forwarding to Dolphin's handler.
+	C.nanoarch_allow_cgo_sigbus()
 
 	thread.SwitchGraphics(n.Video.gl.enabled)
 

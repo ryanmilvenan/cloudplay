@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -25,23 +27,79 @@ import (
 #include <signal.h>
 #include <pthread.h>
 
-// nanoarch_init_sigbus allows SIGBUS to pass through Go's runtime to C
-// signal handlers (e.g. Dolphin's fastmem handler).
+// ── SIGBUS recovery handler ────────────────────────────────────────────────
 //
-// Go's runtime intercepts SIGBUS before C handlers when the signal originates
-// in CGo-executed C code (e.g. JIT-compiled GC game code). By resetting
-// SIGBUS to SIG_DFL BEFORE Dolphin installs its own handler, Dolphin's
-// sigaction will be registered first and Go will forward unhandled SIGBUS
-// signals to it.
+// Root cause (confirmed via core dump 2026-03-30):
+// dolphin_libretro.so has a race: a background thread calls
+// ftruncate(shm_fd, 0) on the GameCube /dev/shm/dolphin-emu.* segment while
+// the CPU-emulation thread still has it mmap'd.  This generates
+// SIGBUS (si_code=BUS_ADRERR=2) when the CPU thread accesses a page whose
+// physical backing has been removed.
 //
-// This is called from CoreLoad, before retro_init which is where Dolphin
-// registers its fastmem SIGBUS handler.
-static void nanoarch_allow_cgo_sigbus(void) {
-    // Unblock SIGBUS for the current thread so it can reach C handlers.
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIGBUS);
-    pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+// Fix: intercept SIGBUS before Go's runtime.  When BUS_ADRERR is detected
+// and the faulting address is a user-space virtual address, replace the
+// missing page with a fresh anonymous zero page via mmap(MAP_FIXED|MAP_ANON).
+// The instruction is then retried; the read/write hits zeros instead of
+// crashing.  For unrecognised si_code values the handler re-raises with
+// SIG_DFL so unexpected faults are still visible.
+//
+// The handler is installed in nanoarch_install_sigbus_handler(), called from
+// CoreLoad before retro_init, so it is in place before Dolphin creates its
+// shm segments.
+
+#include <sys/mman.h>
+#include <unistd.h>
+#include <string.h>
+
+static struct sigaction g_prev_sigbus_sa;  // saved Go sigaction
+static int g_sigbus_handler_installed = 0;
+
+static void sigbus_recovery_handler(int sig, siginfo_t *info, void *uctx) {
+    (void)sig;
+    (void)uctx;
+    if (info == NULL) goto reraise;
+    // Only recover from hardware memory-access errors (BUS_ADRERR).
+    if (info->si_code != BUS_ADRERR) goto reraise;
+    {
+        // Map a fresh zero page over the faulting address so the access
+        // returns 0 and execution can continue.
+        void *fault_page = (void *)((uintptr_t)info->si_addr & ~(uintptr_t)(4096-1));
+        void *result = mmap(fault_page, 4096,
+                            PROT_READ | PROT_WRITE,
+                            MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
+                            -1, 0);
+        if (result != MAP_FAILED) return;
+    }
+reraise:
+    {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = SIG_DFL;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGBUS, &sa, NULL);
+    }
+    raise(SIGBUS);
+}
+
+static void nanoarch_install_sigbus_handler(void) {
+    if (g_sigbus_handler_installed) return;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = sigbus_recovery_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
+    sigaction(SIGBUS, &sa, &g_prev_sigbus_sa);
+    g_sigbus_handler_installed = 1;
+}
+
+// nanoarch_reset_core_signals installs the SIGBUS recovery handler and
+// unblocks SIGBUS on the calling thread.
+static void nanoarch_reset_core_signals(void) {
+    nanoarch_install_sigbus_handler();
+    sigset_t unblock;
+    sigemptyset(&unblock);
+    sigaddset(&unblock, SIGBUS);
+    pthread_sigmask(SIG_UNBLOCK, &unblock, NULL);
 }
 */
 import "C"
@@ -211,11 +269,29 @@ func (n *Nanoarch) CoreLoad(meta Metadata) {
 	n.Video.gl.autoCtx = meta.AutoGlContext
 	n.Video.gl.enabled = meta.IsGlAllowed
 
-	// Unblock SIGBUS so that C code (e.g. Dolphin's JIT fastmem handler) can
-	// install and use its own SIGBUS handler.  Without this, Go's runtime
-	// intercepts SIGBUS caused by Dolphin's memory-mapped JIT regions and
-	// terminates the process instead of forwarding to Dolphin's handler.
-	C.nanoarch_allow_cgo_sigbus()
+	// Install a C-level SIGBUS recovery handler before retro_init.
+	//
+	// Root cause (confirmed via core dump 2026-03-30):
+	// dolphin_libretro.so races: a background thread calls ftruncate(shm_fd,0)
+	// on the GameCube /dev/shm/dolphin-emu.* segment while the CPU emulation
+	// thread (same_thread / run_loop) still has it mmap'd.  Go's runtime
+	// intercepts the resulting BUS_ADRERR SIGBUS before any C handler can run,
+	// then re-raises it — hitting SIG_DFL and crashing the process.
+	//
+	// The C helper nanoarch_reset_core_signals() installs a SA_SIGINFO handler
+	// that catches BUS_ADRERR and replaces the faulting page with a zero
+	// anonymous page (mmap MAP_FIXED|MAP_ANON), allowing the instruction to
+	// retry and succeed.  This is installed BEFORE retro_init so it is in
+	// place before Dolphin creates its shm regions.
+	//
+	// We also call signal.Ignore(SIGBUS) here so that Go's runtime stops
+	// competing with our C handler: Go will mark SIGBUS as "ignored" in its
+	// internal signal table, which prevents Go from reinstalling its own
+	// sigaction over our C handler when the Go runtime refreshes signal state.
+	if meta.UsesLibCo {
+		signal.Ignore(syscall.SIGBUS)
+	}
+	C.nanoarch_reset_core_signals()
 
 	thread.SwitchGraphics(n.Video.gl.enabled)
 

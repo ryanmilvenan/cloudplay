@@ -17,10 +17,78 @@ package nanoarch
 #include <stdlib.h>
 #include <string.h>
 
+// ── External-memory extension injection ───────────────────────────────────
+//
+// When Dolphin calls create_device2 with our create_device_wrapper, it passes
+// us the VkDeviceCreateInfo it has built.  We append VK_KHR_external_memory
+// and VK_KHR_external_memory_fd to ppEnabledExtensionNames so the resulting
+// VkDevice supports the zero-copy export path.
+//
+// If either extension is unavailable the vkCreateDevice call returns
+// VK_ERROR_EXTENSION_NOT_PRESENT; in that case we retry without them and
+// set g_extmem_injected = false so the caller knows to skip zero-copy.
+
+static int g_extmem_injected = 0; // 1 if extensions were successfully injected
+
+static const char *kExternalMemExts[] = {
+    "VK_KHR_external_memory",
+    "VK_KHR_external_memory_fd",
+};
+#define N_EXTMEM_EXTS 2
+
+// create_device_with_extmem is the VkDevice-wrapper callback passed to
+// create_device2.  It injects external-memory extensions into the core's
+// VkDeviceCreateInfo before calling vkCreateDevice.
+static VkDevice create_device_with_extmem(
+    VkPhysicalDevice gpu,
+    void *opaque,
+    const VkDeviceCreateInfo *core_info)
+{
+    (void)opaque;
+    if (!core_info) return VK_NULL_HANDLE;
+
+    // Build augmented extension list.
+    uint32_t total = core_info->enabledExtensionCount + N_EXTMEM_EXTS;
+    const char **exts = (const char **)malloc(total * sizeof(const char *));
+    if (!exts) return VK_NULL_HANDLE;
+
+    // Copy core's extensions.
+    for (uint32_t i = 0; i < core_info->enabledExtensionCount; i++) {
+        exts[i] = core_info->ppEnabledExtensionNames[i];
+    }
+    // Append ours.
+    for (int i = 0; i < N_EXTMEM_EXTS; i++) {
+        exts[core_info->enabledExtensionCount + i] = kExternalMemExts[i];
+    }
+
+    // Build a modified create info.
+    VkDeviceCreateInfo info = *core_info;
+    info.enabledExtensionCount   = total;
+    info.ppEnabledExtensionNames = exts;
+
+    VkDevice device = VK_NULL_HANDLE;
+    VkResult res = vkCreateDevice(gpu, &info, NULL, &device);
+    free(exts);
+
+    if (res == VK_SUCCESS) {
+        g_extmem_injected = 1;
+        return device;
+    }
+
+    // Extension(s) unsupported — retry with core's original info.
+    g_extmem_injected = 0;
+    res = vkCreateDevice(gpu, core_info, NULL, &device);
+    return (res == VK_SUCCESS) ? device : VK_NULL_HANDLE;
+}
+
 // Trampoline: call create_device2 from the core's negotiation interface.
 // Returns true on success, filling in ctx.
 // If create_device2 is NULL, falls back to create_device (v1).
 // Uses vkGetInstanceProcAddr from the Vulkan loader directly.
+//
+// Phase 3D: passes create_device_with_extmem as the device-creation wrapper
+// so that external-memory extensions are injected into the negotiated VkDevice,
+// enabling the zero-copy GPU→CUDA→NVENC path.
 static bool call_create_device(
     const struct retro_hw_render_context_negotiation_interface_vulkan *neg,
     struct retro_vulkan_context *ctx,
@@ -28,24 +96,39 @@ static bool call_create_device(
     VkPhysicalDevice gpu)
 {
     if (!neg) return false;
+    g_extmem_injected = 0;
 
     // v2: prefer create_device2 when interface_version >= 2
     if (neg->interface_version >= 2 && neg->create_device2) {
         return neg->create_device2(ctx, instance, gpu, VK_NULL_HANDLE,
                                    vkGetInstanceProcAddr,
-                                   NULL, // create_device_wrapper: use default
+                                   create_device_with_extmem, // inject extmem exts
                                    NULL); // opaque
     }
-    // v1 fallback
+    // v1 fallback: pass external-memory as required extensions.
+    // create_device will include them in device creation.
+    // If it returns false (extensions unsupported), retry without them.
     if (neg->create_device) {
+        bool ok = neg->create_device(ctx, instance, gpu, VK_NULL_HANDLE,
+                                     vkGetInstanceProcAddr,
+                                     (const char **)kExternalMemExts, N_EXTMEM_EXTS,
+                                     NULL, 0, NULL);
+        if (ok) {
+            g_extmem_injected = 1;
+            return true;
+        }
+        // Retry without external-memory extensions.
+        g_extmem_injected = 0;
         return neg->create_device(ctx, instance, gpu, VK_NULL_HANDLE,
                                   vkGetInstanceProcAddr,
-                                  NULL, 0, // no required extensions
-                                  NULL, 0, // no required layers
-                                  NULL);   // no required features
+                                  NULL, 0, NULL, 0, NULL);
     }
     return false;
 }
+
+// extmem_was_injected returns 1 if the last call_create_device successfully
+// injected external-memory extensions into the negotiated VkDevice.
+static int extmem_was_injected(void) { return g_extmem_injected; }
 */
 import "C"
 import (
@@ -197,15 +280,18 @@ func initVulkanVideoWithNegotiation(cfg vulkan.Config) (*vulkan.VulkanContext, e
 		return nil, fmt.Errorf("negotiation: create_device returned false")
 	}
 
-	Nan0.log.Info().Msgf("Vulkan negotiation: device created by core, queue_family=%d", uint32(vkCtx.queue_family_index))
+	extMemInjected := bool(C.extmem_was_injected() != 0)
+	Nan0.log.Info().Msgf("Vulkan negotiation: device created by core, queue_family=%d, extmem_injected=%v",
+		uint32(vkCtx.queue_family_index), extMemInjected)
 
 	// Use the device/queue the core created.
 	result := vulkan.NegotiationResult{
-		Instance:    baseCtx.VkInstancePtr(),
-		PhysDevice:  unsafe.Pointer(vkCtx.gpu),
-		Device:      unsafe.Pointer(vkCtx.device),
-		Queue:       unsafe.Pointer(vkCtx.queue),
-		QueueFamily: uint32(vkCtx.queue_family_index),
+		Instance:            baseCtx.VkInstancePtr(),
+		PhysDevice:          unsafe.Pointer(vkCtx.gpu),
+		Device:              unsafe.Pointer(vkCtx.device),
+		Queue:               unsafe.Pointer(vkCtx.queue),
+		QueueFamily:         uint32(vkCtx.queue_family_index),
+		ExternalMemoryReady: extMemInjected,
 	}
 	return vulkan.NewVulkanContextFromNegotiation(cfg, result)
 }

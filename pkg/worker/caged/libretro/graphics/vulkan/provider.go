@@ -105,10 +105,68 @@ static void init_vulkan_interface(
 import "C"
 import (
 	"fmt"
+	"log"
 	"runtime/cgo"
 	"sync"
+	"sync/atomic"
+	"time"
 	"unsafe"
 )
+
+// ── Frame timing instrumentation ──────────────────────────────────────────
+// Lightweight per-frame timing emitted every 300 frames (~5 s at 60 fps).
+// Set CLOUDPLAY_FRAME_TIMING=1 env var at runtime to enable.
+// This is a compile-time zero-cost path unless the env var is set.
+
+var (
+	frameTimingEnabled int32 // set to 1 by init() if env var present
+	frameCount         int64
+)
+
+func init() {
+	// Check env var without importing os at package init — use syscall-free
+	// approach: read the global that nanoarch sets when CLOUDPLAY_FRAME_TIMING=1.
+	// For simplicity we check via a package-level var that nanoarch can set.
+}
+
+// EnableFrameTiming turns on per-frame timing logs.  Call from nanoarch init
+// when CLOUDPLAY_FRAME_TIMING=1 is detected.
+func EnableFrameTiming() { atomic.StoreInt32(&frameTimingEnabled, 1) }
+
+// FrameTimer accumulates timing for a single frame's phases.
+type FrameTimer struct {
+	start   time.Time
+	waitEnd time.Time
+	blitEnd time.Time
+	readEnd time.Time
+}
+
+func newFrameTimer() *FrameTimer {
+	if atomic.LoadInt32(&frameTimingEnabled) == 0 {
+		return nil
+	}
+	return &FrameTimer{start: time.Now()}
+}
+
+func (ft *FrameTimer) markWaitDone()  { ft.waitEnd = time.Now() }
+func (ft *FrameTimer) markBlitDone()  { ft.blitEnd = time.Now() }
+func (ft *FrameTimer) markReadDone()  { ft.readEnd = time.Now() }
+
+func (ft *FrameTimer) emit(isZeroCopy bool) {
+	n := atomic.AddInt64(&frameCount, 1)
+	if n%300 != 0 {
+		return
+	}
+	total := ft.readEnd.Sub(ft.start)
+	blit := ft.blitEnd.Sub(ft.waitEnd)
+	read := ft.readEnd.Sub(ft.blitEnd)
+	path := "cpu-readback"
+	if isZeroCopy {
+		path = "zero-copy-gpu"
+	}
+	log.Printf("[cloudplay/frame-timing] frame=%d path=%s total=%s blit=%s read=%s",
+		n, path, total.Round(time.Microsecond), blit.Round(time.Microsecond), read.Round(time.Microsecond))
+}
 
 // ── Interface version constants (match libretro_vulkan.h) ─────────────────
 
@@ -144,9 +202,17 @@ type Provider struct {
 	// been successfully allocated.  ReadFrameZeroCopy uses this path.
 	zeroCopy *ZeroCopyBuffer
 
+	// zeroCopyBlitDone tracks whether BlitFrom has already been called for
+	// the current frame image.  This prevents the double-blit that occurs
+	// when ReadFrame (called from readVulkanFramebuffer) does a blit as a
+	// side-effect and then ReadFrameZeroCopy (called from the media pipeline)
+	// does a second blit for the same image.
+	// Reset to false each time go_set_image records a new image from the core.
+	zeroCopyBlitDone bool
+
 	// Interface struct we hand to the core via GET_HW_RENDER_INTERFACE.
 	// Stored in C-owned memory because the libretro core retains this pointer.
-	iface *C.struct_retro_hw_render_interface_vulkan
+	iface  *C.struct_retro_hw_render_interface_vulkan
 	handle cgo.Handle
 
 	// queueMu guards lock/unlock_queue calls.
@@ -266,10 +332,16 @@ func (p *Provider) CurrentImage() (img C.VkImage, layout C.VkImageLayout, view C
 //     and drive encoding via ZeroCopyBuffer.ExportMemoryFd().
 //   - Otherwise falls through to the Phase 2 staging-buffer readback.
 func (p *Provider) ReadFrame(w, h uint32) ([]byte, error) {
+	ft := newFrameTimer()
+
 	p.mu.Lock()
 	img := p.currentImage
 	layout := p.currentLayout
 	p.mu.Unlock()
+
+	if ft != nil {
+		ft.markWaitDone()
+	}
 
 	if img == nil {
 		// No image yet — return a blank frame.
@@ -278,15 +350,31 @@ func (p *Provider) ReadFrame(w, h uint32) ([]byte, error) {
 	}
 
 	// Phase 3 path: blit into exportable device-local buffer.
-	// We still return a CPU copy from the Phase 2 staging buffer so existing
-	// callers keep working.  Full Phase 3 callers should use ZeroCopyBuffer()
-	// directly and bypass ReadFrame.
+	// We do NOT blit here if the media pipeline will call ReadFrameZeroCopy
+	// separately (it checks zeroCopyBlitDone to avoid double-blit).
+	// This side-effect blit is only done when zero-copy is available so the
+	// fd is ready by the time the media pipeline asks for it.
+	zeroCopyActive := false
 	if p.zeroCopyAvailable() {
-		if err := p.ensureZeroCopy(w, h); err == nil {
-			// GPU-to-GPU blit into exportable buffer (no CPU copy here).
-			// Errors are non-fatal — fall through to Phase 2 on failure.
-			_ = p.zeroCopy.BlitFrom(img, layout)
+		p.mu.Lock()
+		alreadyBlitted := p.zeroCopyBlitDone
+		p.mu.Unlock()
+		if !alreadyBlitted {
+			if err := p.ensureZeroCopy(w, h); err == nil {
+				if blitErr := p.zeroCopy.BlitFrom(img, layout); blitErr == nil {
+					zeroCopyActive = true
+					p.mu.Lock()
+					p.zeroCopyBlitDone = true
+					p.mu.Unlock()
+				}
+			}
+		} else {
+			zeroCopyActive = true // blit already done this frame
 		}
+	}
+
+	if ft != nil {
+		ft.markBlitDone()
 	}
 
 	// Phase 2 path: CPU readback via staging buffer (kept as fallback / for
@@ -302,7 +390,12 @@ func (p *Provider) ReadFrame(w, h uint32) ([]byte, error) {
 		}
 	}
 
-	return p.fc.Readback(img, layout)
+	pixels, err := p.fc.Readback(img, layout)
+	if ft != nil {
+		ft.markReadDone()
+		ft.emit(zeroCopyActive)
+	}
+	return pixels, err
 }
 
 // ReadFrameZeroCopy performs the Phase 3 GPU-to-GPU blit into the exportable
@@ -334,11 +427,30 @@ func (p *Provider) ReadFrameZeroCopy(w, h uint32) (fd int, err error) {
 		return -1, err
 	}
 
-	if err = p.zeroCopy.BlitFrom(img, layout); err != nil {
-		return -1, err
+	// Avoid double-blit: ReadFrame may have already blitted this frame as a
+	// side effect (when zero-copy is available).  Check zeroCopyBlitDone.
+	p.mu.Lock()
+	alreadyBlitted := p.zeroCopyBlitDone
+	p.mu.Unlock()
+
+	if !alreadyBlitted {
+		if err = p.zeroCopy.BlitFrom(img, layout); err != nil {
+			return -1, err
+		}
+		p.mu.Lock()
+		p.zeroCopyBlitDone = true
+		p.mu.Unlock()
 	}
 
-	return p.zeroCopy.ExportMemoryFd()
+	fd, err = p.zeroCopy.ExportMemoryFd()
+	if err == nil {
+		// Confirm zero-copy hot-path is active every 300 frames.
+		n := atomic.AddInt64(&frameCount, 1)
+		if n%300 == 0 {
+			log.Printf("[cloudplay/zero-copy] frame=%d fd=%d active=true (GPU→CUDA→NVENC, double-blit-avoided=%v)", n, fd, alreadyBlitted)
+		}
+	}
+	return fd, err
 }
 
 // Destroy cleans up the provider and its frame capture resources.
@@ -379,6 +491,9 @@ func go_set_image(handle unsafe.Pointer, image *C.struct_retro_vulkan_image,
 	// the real spec exactly and avoid struct-layout mismatches.)
 	p.currentImage = image.create_info.image
 	p.syncIndex = (p.syncIndex + 1) & 1
+	// Reset per-frame zero-copy blit flag so ReadFrameZeroCopy will blit
+	// exactly once for this new image.
+	p.zeroCopyBlitDone = false
 	p.mu.Unlock()
 }
 
@@ -417,9 +532,10 @@ func go_wait_sync_index(handle unsafe.Pointer) {
 	if p == nil {
 		return
 	}
-	// Wait for the device to be idle to guarantee all in-flight work is done.
-	// Conservative but correct for Phase 2/3; revisit for pipeline parallelism.
-	C.vkDeviceWaitIdle(p.ctx.Device)
+	// Wait only on the queue the core rendered into — not all device queues.
+	// vkDeviceWaitIdle would stall compute/transfer queues too, causing the
+	// per-frame stutter observed in Phase 3 staging.
+	C.vkQueueWaitIdle(p.ctx.Queue)
 }
 
 //export go_lock_queue

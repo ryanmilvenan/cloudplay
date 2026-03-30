@@ -397,19 +397,33 @@ func (c *Context) beginOneShot() (C.VkCommandBuffer, error) {
 	return cmd, nil
 }
 
-// submitOneShot submits and waits for a one-shot command buffer, then frees it.
+// submitOneShot submits a one-shot command buffer and waits for it with a
+// fence (narrower than vkQueueWaitIdle which stalls all in-flight work).
 func (c *Context) submitOneShot(cmd C.VkCommandBuffer) error {
 	C.vkEndCommandBuffer(cmd)
-	submitInfo := C.VkSubmitInfo{
-		sType:                C.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-		commandBufferCount:   1,
-		pCommandBuffers:      &cmd,
+
+	// Create a fence so we wait only for THIS submission, not the whole queue.
+	fenceInfo := C.VkFenceCreateInfo{sType: C.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}
+	var fence C.VkFence
+	if res := C.vkCreateFence(c.Device, &fenceInfo, nil, &fence); res != C.VK_SUCCESS {
+		C.vkFreeCommandBuffers(c.Device, c.CmdPool, 1, &cmd)
+		return fmt.Errorf("vulkan: vkCreateFence: %d", int(res))
 	}
-	if res := C.vkQueueSubmit(c.Queue, 1, &submitInfo, nil); res != C.VK_SUCCESS {
+
+	submitInfo := C.VkSubmitInfo{
+		sType:              C.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+		commandBufferCount: 1,
+		pCommandBuffers:    &cmd,
+	}
+	if res := C.vkQueueSubmit(c.Queue, 1, &submitInfo, fence); res != C.VK_SUCCESS {
+		C.vkDestroyFence(c.Device, fence, nil)
 		C.vkFreeCommandBuffers(c.Device, c.CmdPool, 1, &cmd)
 		return fmt.Errorf("vulkan: vkQueueSubmit: %d", int(res))
 	}
-	C.vkQueueWaitIdle(c.Queue)
+
+	// Wait only for this fence (up to 5 seconds — more than enough per frame).
+	C.vkWaitForFences(c.Device, 1, &fence, C.VK_TRUE, C.uint64_t(5_000_000_000))
+	C.vkDestroyFence(c.Device, fence, nil)
 	C.vkFreeCommandBuffers(c.Device, c.CmdPool, 1, &cmd)
 	return nil
 }

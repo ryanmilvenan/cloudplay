@@ -2,141 +2,164 @@
 <html lang="en">
 <head>
     <meta charset="utf-8"/>
-    <meta name="viewport" content="user-scalable=0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
-
-    <meta property="og:type" content="cloud-game"/>
-    <meta property="og:title" content="Web-based Cloud Gaming for Retro Games"/>
-    <meta property="og:description" content="Play and share cloud gaming experience with your friends"/>
-    <meta property="og:url" content=""/>
-    <meta property="og:site_name" content="Cloud Retro"/>
-    <meta property="og:author" content="giongto35 trichimtrich"/>
-
     <link rel="icon" href="data:,">
-
-    <link href="css/main.css?v=3" rel="stylesheet">
-    <link href="css/ui.css?v=3" rel="stylesheet">
-    <title>Cloud Retro</title>
+    <link href="css/main.css?v=7" rel="stylesheet">
+    <link href="css/ui.css?v=7" rel="stylesheet">
+    <title>Play</title>
 </head>
 <body>
 <div id="gamebody">
-    <div class="app-button" id="w" title="Workers">W</div>
 
-    <div id="circle-pad-holder">
-        <div id="btn-up" class="dpad" data-key="up"></div>
-        <div id="btn-down" class="dpad" data-key="down"></div>
-        <div id="btn-left" class="dpad" data-key="left"></div>
-        <div id="btn-right" class="dpad" data-key="right"></div>
-        <div id="circle-pad"></div>
-    </div>
-
+    <!-- Game stream (hidden until running) -->
     <div id="screen">
         <video id="stream" class="game-screen" hidden muted playsinline preload="none"></video>
         <canvas id="mirror-stream" class="game-screen" hidden></canvas>
-        <div id="menu-screen">
-            <div id="menu-container"></div>
-            <div id="menu-item-choice" class="hidden"></div>
-        </div>
+        <button id="audio-btn" class="audio-btn hidden" title="Unmute">🔇</button>
         <div class="screen__footer hover hidden">
-            <div>cloudretro</div>
-            <div class="app-button fs kbm-button-fs hidden" id="kbm2"
-                 title="Switch from keyboard/mouse to retropad">🎮+⌨️+🖱️
-            </div>
             <div id="stats-overlay"></div>
         </div>
-        <div id="play-stream" hidden>
-            <span>⏵</span>
-            <span>Click to play</span>
+    </div>
+
+    <!-- Game list screen -->
+    <div id="menu-screen">
+        <div id="game-list-screen" class="loading">
+            <div id="game-list-title">SELECT A GAME</div>
+            <div id="game-list-container"></div>
+        </div>
+        <!-- kept for JS compat -->
+        <div id="menu-container" style="display:none"></div>
+        <div id="menu-item-choice" style="display:none"></div>
+    </div>
+
+    <!-- Overlay cog (shown only in-game on mobile) -->
+    <div id="overlay-cog" class="overlay-cog hidden">⚙</div>
+
+    <!-- Overlay panel -->
+    <div id="overlay-panel" class="overlay-panel hidden">
+        <div class="overlay-panel__header">
+            <span id="overlay-game-title" class="overlay-game-title">—</span>
+            <span class="overlay-running-dot">● Running</span>
+        </div>
+        <div class="overlay-panel__section">
+            <div class="overlay-section-label">Players</div>
+            <div id="overlay-players" class="overlay-players">
+                <button class="overlay-player-slot" data-slot="0"><span class="slot-label">P1</span> <span class="slot-status">○</span></button>
+                <button class="overlay-player-slot" data-slot="1"><span class="slot-label">P2</span> <span class="slot-status">○</span></button>
+                <button class="overlay-player-slot" data-slot="2"><span class="slot-label">P3</span> <span class="slot-status">○</span></button>
+                <button class="overlay-player-slot" data-slot="3"><span class="slot-label">P4</span> <span class="slot-status">○</span></button>
+            </div>
+        </div>
+        <div class="overlay-panel__actions">
+            <button id="overlay-invite" class="overlay-btn">Invite Friends</button>
+            <button id="overlay-save" class="overlay-btn">Save</button>
+            <button id="overlay-load" class="overlay-btn">Load</button>
+            <button id="overlay-leave" class="overlay-btn overlay-btn--danger">Leave Game</button>
         </div>
     </div>
 
-    <div id="servers"></div>
-    <div id="settings"></div>
-
-    <div id="guide-txt">
-        <b>Arrows</b> (move), <b>ZXCVAS;'./</b> (game ABXYL1-L3R1-R3),
-        <b>Shift/Enter/K/L</b> (select/start/save/load), <b>F</b> (fullscreen), <b>share</b> (copy the link)
-    </div>
-    <div id="btn-join" class="btn big" data-key="join"></div>
-    <div id="slider-playeridx" class="slidecontainer">
-        <span>player choice</span>
-        <input type="range" aria-label="" min="1" max="4" value="1" class="slider" id="playeridx">
-    </div>
-    <div id="btn-quit" class="btn big" data-key="quit"></div>
-
-    <div class="app-button kbm-button hidden" id="kbm" title="Switch from keyboard/mouse to retropad">
-        C🎮+K⌨️+M🖱️</div>
-
-    <div id="controls-right">
-        <div id="btn-load" class="btn big hidden" data-key="load"></div>
-        <div id="btn-save" class="btn big hidden" data-key="save"></div>
-        <div id="btn-select" class="btn big" data-key="select"></div>
-        <div id="btn-start" class="btn big" data-key="start"></div>
-
-        <div id="color-button-holder">
-            <div id="btn-a" class="btn" data-key="a"></div>
-            <div id="btn-b" class="btn" data-key="b"></div>
-            <div id="btn-x" class="btn" data-key="x"></div>
-            <div id="btn-y" class="btn" data-key="y"></div>
+    <!-- Late-join slot picker -->
+    <div id="slot-picker" class="slot-picker hidden">
+        <div class="slot-picker__title">Pick Your Slot</div>
+        <div id="slot-picker-slots" class="slot-picker__slots">
+            <button class="slot-picker__btn" data-slot="0">P1</button>
+            <button class="slot-picker__btn" data-slot="1">P2</button>
+            <button class="slot-picker__btn" data-slot="2">P3</button>
+            <button class="slot-picker__btn" data-slot="3">P4</button>
         </div>
     </div>
 
-    <div id="btn-settings" class="btn" data-key="settings"></div>
+    <!-- Toast notifications -->
+    <div id="noti-box"></div>
 
-    <input id="room-txt" type="text" aria-label="" placeholder="room id..." disabled>
-
-    <label class="dpad-toggle-label" title="D-pad toggle">
-        <input type="checkbox" id="dpad-toggle" checked>
-        <span class="dpad-toggle-slider"></span>
-    </label>
-
-    <div id="noti-box">Oh my god</div>
-
+    <!-- Help overlay (kept for JS compat) -->
     <div id="help-overlay" class="hidden">
         <div id="help-overlay-background"></div>
         <div id="help-overlay-detail"></div>
     </div>
-    <div id="btn-help" class="btn" data-key="help"></div>
-    {{if .Recording.Enabled}}
-    <input id="user-name" type="text" data-lpignore="true" spellcheck="false" placeholder="user"
-           class="record-user" aria-label="">
-    <div id="btn-rec" class="btn" data-key="rec"></div>
-    {{end}}
-</div>
-<div class="source"><span>Cloudretro (ɔ) 2025</span>
-    <a rel="noopener noreferrer" target="_blank" href="https://github.com/giongto35/cloud-game">
-        <span id="v">69ff8ae</span>
-    </a>
+
+    <!-- Elements required by JS but hidden -->
+    <div style="display:none">
+        <!-- retropad buttons (input.js looks these up) -->
+        <div id="btn-up" data-key="up"></div>
+        <div id="btn-down" data-key="down"></div>
+        <div id="btn-left" data-key="left"></div>
+        <div id="btn-right" data-key="right"></div>
+        <div id="btn-a" data-key="a"></div>
+        <div id="btn-b" data-key="b"></div>
+        <div id="btn-x" data-key="x"></div>
+        <div id="btn-y" data-key="y"></div>
+        <div id="btn-l" data-key="l"></div>
+        <div id="btn-r" data-key="r"></div>
+        <div id="btn-start" data-key="start"></div>
+        <div id="btn-select" data-key="select"></div>
+        <div id="btn-load" data-key="load"></div>
+        <div id="btn-save" data-key="save"></div>
+        <div id="btn-join" data-key="join"></div>
+        <div id="btn-quit" data-key="quit"></div>
+        <div id="btn-help" data-key="help"></div>
+        <div id="btn-settings" data-key="settings"></div>
+        <div id="btn-rec" data-key="rec"></div>
+        <!-- other JS-required IDs -->
+        <div id="circle-pad"></div>
+        <div id="circle-pad-holder"></div>
+        <div id="w"></div>
+        <div id="kbm"></div>
+        <div id="kbm2"></div>
+        <div id="servers"></div>
+        <div id="settings"></div>
+        <div id="guide-txt"></div>
+        <div id="server-list"></div>
+        <input id="playeridx" type="range" min="1" max="4" value="1">
+        <input id="room-txt" type="text">
+        <input id="dpad-toggle" type="checkbox" checked>
+        <input id="user-name" type="text">
+    </div>
+
 </div>
 
 <script type="importmap">
     {
       "imports": {
-        "api": "./js/api.js?v=3",
-        "env": "./js/env.js?v=3",
-        "event": "./js/event.js?v=3",
-        "gui": "./js/gui.js?v=3",
-        "input": "./js/input/input.js?v=3",
-        "log": "./js/log.js?v=3",
-        "network": "./js/network/network.js?v=3",
-        "settings": "./js/settings.js?v=3",
-        "utils": "./js/utils.js?v=3"
+        "api": "./js/api.js?v=7",
+        "env": "./js/env.js?v=7",
+        "event": "./js/event.js?v=7",
+        "gui": "./js/gui.js?v=7",
+        "input": "./js/input/input.js?v=7",
+        "log": "./js/log.js?v=7",
+        "network": "./js/network/network.js?v=7",
+        "settings": "./js/settings.js?v=7",
+        "utils": "./js/utils.js?v=7"
       }
     }
 </script>
 
-<script type="module" src="js/app.js?v=3"></script>
+<script>
+// Force gamebody to actual screen size before anything else loads
+(function() {
+    function fix() {
+        var gb = document.getElementById('gamebody');
+        if (gb) {
+            gb.style.width = window.innerWidth + 'px';
+            gb.style.height = window.innerHeight + 'px';
+            gb.style.position = 'fixed';
+            gb.style.top = '0';
+            gb.style.left = '0';
+        }
+    }
+    fix();
+    window.addEventListener('resize', fix);
+})();
+</script>
+<script type="module" src="js/app.js?v=7"></script>
 
 {{if .Analytics.Inject}}
 <script async src="https://www.googletagmanager.com/gtag/js?id={{.Analytics.Gtag}}"></script>
 <script>
     window.dataLayer = window.dataLayer || [];
-
-    function gtag() {
-        dataLayer.push(arguments);
-    }
-
+    function gtag() { dataLayer.push(arguments); }
     gtag('js', new Date());
     gtag('config', '{{.Analytics.Gtag}}');
 </script>

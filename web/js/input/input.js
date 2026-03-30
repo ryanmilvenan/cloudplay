@@ -5,13 +5,13 @@ import {
     sub
 } from 'event';
 
-export {KEY, JOYPAD_KEYS} from './keys.js?v=3';
+export {KEY, JOYPAD_KEYS} from './keys.js?v=5';
 
-import {joystick} from './joystick.js?v=3';
-import {keyboard} from './keyboard.js?v=3'
-import {pointer} from './pointer.js?v=3';
-import {retropad} from './retropad.js?v=3';
-import {touch} from './touch.js?v=3';
+import {joystick} from './joystick.js?v=5';
+import {keyboard} from './keyboard.js?v=5'
+import {pointer} from './pointer.js?v=5';
+import {retropad} from './retropad.js?v=5';
+import {touch} from './touch.js?v=5';
 
 export {joystick, keyboard, pointer, retropad, touch};
 

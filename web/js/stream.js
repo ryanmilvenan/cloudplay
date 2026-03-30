@@ -9,7 +9,7 @@ import {opts, settings} from 'settings';
 
 const videoEl = document.getElementById('stream')
 const mirrorEl = document.getElementById('mirror-stream')
-const playEl = document.getElementById('play-stream')
+const audioBtn = document.getElementById('audio-btn')
 
 const options = {
     volume: 0.5,
@@ -61,24 +61,22 @@ const toggle = (show) => state.screen.toggleAttribute('hidden', show === undefin
 
 const resize = (w, h, aspect, fit) => {
     if (!state.ready) return;
-
-    state.screen.setAttribute('width', '' + w)
-    state.screen.setAttribute('height', '' + h)
-    aspect !== undefined && (state.screen.style.aspectRatio = '' + aspect)
-    fit !== undefined && (state.screen.style['object-fit'] = fit)
+    // CSS handles all sizing: width/height/aspect-ratio are left to main.css.
+    // object-fit: contain on a 100%x100% element lets the browser center
+    // the native video content automatically — no inline styles needed.
 }
 
 const showPlayButton = () => {
-        state.autoplayWait = true
-        toggle()
-        playEl.removeAttribute('hidden')
+    state.autoplayWait = true
+    toggle(true)
+    audioBtn.classList.remove('hidden')
 }
 
-playEl.addEventListener('click', () => {
-    playEl.setAttribute('hidden', "")
+audioBtn.addEventListener('click', () => {
+    audioBtn.classList.add('hidden')
     state.autoplayWait = false
     play()
-    toggle()
+    toggle(true)
 })
 
 // Track resize even when the underlying media stream changes its video size
@@ -220,6 +218,7 @@ export const stream = {
     },
     play,
     showPlayButton,
+    get audioBtn() { return audioBtn },
     toggle,
     hasDisplay: true,
     init,

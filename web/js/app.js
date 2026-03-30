@@ -46,15 +46,17 @@ import {input, KEY} from 'input';
 import {socket, webrtc} from 'network';
 import {debounce} from 'utils';
 
-import {gameList} from './gameList.js?v=3';
-import {menu} from './menu.js?v=3';
-import {message} from './message.js?v=3';
-import {recording} from './recording.js?v=3';
-import {room} from './room.js?v=3';
-import {screen} from './screen.js?v=3';
-import {stats} from './stats.js?v=3';
-import {stream} from './stream.js?v=3';
-import {workerManager} from "./workerManager.js?v=3";
+import {gameList} from './gameList.js?v=5';
+import {gameListNew} from './gameListNew.js?v=5';
+import {menu} from './menu.js?v=5';
+import {message} from './message.js?v=5';
+import {overlay} from './overlay.js?v=5';
+import {recording} from './recording.js?v=5';
+import {room} from './room.js?v=5';
+import {screen} from './screen.js?v=5';
+import {stats} from './stats.js?v=5';
+import {stream} from './stream.js?v=5';
+import {workerManager} from "./workerManager.js?v=5";
 
 settings.init();
 log.level = settings.loadOr(opts.LOG_LEVEL, log.DEFAULT);
@@ -81,17 +83,13 @@ Object.keys(KEY).forEach(button => {
 /**
  * State machine transition.
  * @param newState A new state strictly from app.state.*
- * @example
- * setState(app.state.eden)
  */
 const setState = (newState = app.state.eden) => {
     if (newState === state) return;
 
     const prevState = state;
 
-    // keep the current state intact for one of the "uber" states
     if (state && state._uber) {
-        // if we are done with the uber state
         if (lastState === newState) state = newState;
         lastState = newState;
     } else {
@@ -103,12 +101,18 @@ const setState = (newState = app.state.eden) => {
         const previous = prevState ? prevState.name : '???';
         const current = state ? state.name : '???';
         const kept = lastState ? lastState.name : '???';
-
         log.debug(`[state] ${previous} -> ${current} [${kept}]`);
     }
 };
 
-const onConnectionReady = () => room.id ? startGame() : state.menuReady()
+const onConnectionReady = () => {
+    if (room.id) {
+        // Late-join: show slot picker
+        showSlotPicker();
+    } else {
+        state.menuReady();
+    }
+};
 
 const onLatencyCheck = async (data) => {
     message.show('Connecting to fastest server...');
@@ -137,21 +141,43 @@ const helpScreen = {
     }
 };
 
+// ── New game list screen ──
+
 const showMenuScreen = () => {
     log.debug('[control] loading menu screen');
 
     gui.hide(keyButtons[KEY.SAVE]);
     gui.hide(keyButtons[KEY.LOAD]);
 
-    gameList.show();
+    overlay.disable();
+
+    // Use new game list UI
+    gameListNew.show();
     screen.toggle(menu);
 
     setState(app.state.menu);
 };
 
+// Wire up new game list start callback
+gameListNew.onStart = () => startGame();
+
+// ── Start game ──
+
 const startGame = () => {
     if (!webrtc.isConnected()) {
-        message.show('Game cannot load. Please refresh');
+        // ICE may still be negotiating — wait up to 8s before giving up
+        message.show('Connecting...');
+        let waited = 0;
+        const poll = setInterval(() => {
+            waited += 200;
+            if (webrtc.isConnected()) {
+                clearInterval(poll);
+                startGame();
+            } else if (waited >= 8000) {
+                clearInterval(poll);
+                message.show('Game cannot load. Please refresh');
+            }
+        }, 200);
         return;
     }
 
@@ -164,25 +190,87 @@ const startGame = () => {
 
     setState(app.state.game);
 
-    screen.toggle(stream)
+    // Hide game list, show stream
+    gameListNew.hide();
+    screen.toggle(stream);
+
+    const selectedTitle = gameListNew.selected || gameList.selected;
 
     api.game.start(
-        gameList.selected,
+        selectedTitle,
         room.id,
         recording.isActive(),
         recording.getUser(),
         +playerIndex.value - 1,
     )
 
-    gameList.disable()
-    input.retropad.toggle(false)
-    gui.show(keyButtons[KEY.SAVE]);
-    gui.show(keyButtons[KEY.LOAD]);
-    input.retropad.toggle(true)
+    gameList.disable();
+    gameListNew.disable();
+
+    // Set controller map for this system before enabling retropad
+    const game = gameListNew.selectedGame;
+    if (game && game.system) {
+        input.joystick.setSystem(game.system);
+    }
+
+    input.retropad.toggle(false);
+    input.retropad.toggle(true);
+
+    // Enable overlay
+    overlay.setGameTitle(game ? (game.alias || game.title) : selectedTitle);
+    overlay.setCurrentSlot(+playerIndex.value - 1);
+    overlay.enable();
 };
 
 const saveGame = debounce(() => api.game.save(), 1000);
 const loadGame = debounce(() => api.game.load(), 1000);
+
+// ── Overlay callbacks ──
+
+overlay.onSlotChange = (slot) => {
+    updatePlayerIndex(slot);
+};
+
+overlay.onInvite = () => {
+    saveGame();
+    room.copyToClipboard();
+    message.show('Link copied!');
+};
+
+overlay.onSave = () => saveGame();
+overlay.onLoad = () => loadGame();
+
+overlay.onLeave = () => {
+    overlay.disable();
+    input.retropad.toggle(false);
+    api.game.quit(room.id);
+    room.reset();
+    window.location = window.location.pathname;
+};
+
+// ── Late-join slot picker ──
+
+const slotPickerEl = document.getElementById('slot-picker');
+const slotPickerBtns = document.querySelectorAll('.slot-picker__btn');
+
+const showSlotPicker = () => {
+    slotPickerEl.classList.remove('hidden');
+};
+
+const hideSlotPicker = () => {
+    slotPickerEl.classList.add('hidden');
+};
+
+slotPickerBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const slot = +btn.dataset.slot;
+        updatePlayerIndex(slot);
+        hideSlotPicker();
+        startGame();
+    });
+});
+
+// ── Message handling ──
 
 const onMessage = (m) => {
     const {id, t, p: payload} = m;
@@ -234,7 +322,7 @@ const onKeyPress = (data) => {
     const button = keyButtons[data.key];
 
     if (_dpadArrowKeys.includes(data.key)) {
-        button.classList.add('dpad-pressed');
+        button && button.classList.add('dpad-pressed');
     } else {
         if (button) button.classList.add('pressed');
     }
@@ -251,7 +339,7 @@ const onKeyRelease = data => {
     const button = keyButtons[data.key];
 
     if (_dpadArrowKeys.includes(data.key)) {
-        button.classList.remove('dpad-pressed');
+        button && button.classList.remove('dpad-pressed');
     } else {
         if (button) button.classList.remove('pressed');
     }
@@ -260,14 +348,11 @@ const onKeyRelease = data => {
         if (KEY.HELP === data.key) helpScreen.show(false, event);
     }
 
-    // maybe move it somewhere
     if (!interacted) {
-        // unmute when there is user interaction
         stream.audio.mute(false);
         interacted = true;
     }
 
-    // change app state if settings
     if (KEY.SETTINGS === data.key) setState(app.state.settings);
 
     state.keyRelease(data.key, data.code);
@@ -276,15 +361,14 @@ const onKeyRelease = data => {
 const updatePlayerIndex = (idx, not_game = false) => {
     playerIndex.value = idx + 1;
     !not_game && api.game.setPlayerIndex(idx);
+    overlay.setCurrentSlot(idx);
 };
 
 // noop function for the state
 const _nil = () => ({/*_*/})
 
 const onAxisChanged = (data) => {
-    // maybe move it somewhere
     if (!interacted) {
-        // unmute when there is user interaction
         stream.audio.mute(false);
         interacted = true;
     }
@@ -347,12 +431,19 @@ const app = {
         menu: {
             ..._default,
             name: 'menu',
-            axisChanged: (id, val) => id === 1 && gameList.scroll(val < -.5 ? -1 : val > .5 ? 1 : 0),
+            axisChanged: (id, val) => {
+                // Drive new game list with gamepad axis
+                if (id === 1) {
+                    gameListNew.scroll(val < -.5 ? -1 : val > .5 ? 1 : 0);
+                    gameList.scroll(val < -.5 ? -1 : val > .5 ? 1 : 0);
+                }
+            },
             keyPress: (key) => {
                 switch (key) {
                     case KEY.UP:
                     case KEY.DOWN:
-                        gameList.scroll(key === KEY.UP ? -1 : 1)
+                        gameListNew.scroll(key === KEY.UP ? -1 : 1);
+                        gameList.scroll(key === KEY.UP ? -1 : 1);
                         break;
                 }
             },
@@ -360,6 +451,7 @@ const app = {
                 switch (key) {
                     case KEY.UP:
                     case KEY.DOWN:
+                        gameListNew.scroll(0);
                         gameList.scroll(0);
                         break;
                     case KEY.JOIN:
@@ -399,16 +491,21 @@ const app = {
             keyboardInput: (pressed, e) => api.game.input.keyboard.press(pressed, e),
             mouseMove: (e) => api.game.input.mouse.move(e.dx, e.dy),
             mousePress: (e) => api.game.input.mouse.press(e.b, e.p),
-            keyPress: (key) => input.retropad.setKeyState(key, true),
+            keyPress: (key) => {
+                if (!overlay.isOpen) {
+                    input.retropad.setKeyState(key, true);
+                }
+            },
             keyRelease: function (key) {
-                input.retropad.setKeyState(key, false);
+                if (!overlay.isOpen) {
+                    input.retropad.setKeyState(key, false);
+                }
 
                 switch (key) {
                     case KEY.JOIN: // or SHARE
-                        // save when click share
                         saveGame();
                         room.copyToClipboard();
-                        message.show('Shared link copied to the clipboard!');
+                        message.show('Link copied!');
                         break;
                     case KEY.SAVE:
                         saveGame();
@@ -432,6 +529,7 @@ const app = {
                         updatePlayerIndex(3);
                         break;
                     case KEY.QUIT:
+                        overlay.disable();
                         input.retropad.toggle(false)
                         api.game.quit(room.id)
                         room.reset();
@@ -496,7 +594,13 @@ sub(WEBRTC_NEW_CONNECTION, (data) => {
     webrtc.onData = (x) => onMessage(api.decode(x.data))
     webrtc.start(data.ice);
     api.server.initWebrtc()
+    // Set games immediately — show menu without waiting for WebRTC
     gameList.set(data.games);
+    gameListNew.set(data.games);
+    // Show the game list as soon as we have the game data
+    if (state === app.state.eden || state === app.state.menu) {
+        showMenuScreen();
+    }
 });
 sub(WEBRTC_ICE_CANDIDATE_FOUND, (data) => api.server.sendIceCandidate(data.candidate));
 sub(WEBRTC_SDP_ANSWER, (data) => api.server.sendSdp(data.sdp));

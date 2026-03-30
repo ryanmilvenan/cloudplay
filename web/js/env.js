@@ -6,7 +6,7 @@ import {
 // UI
 const page = document.getElementsByTagName('html')[0];
 const gameBoy = document.getElementById('gamebody');
-const sourceLink = document.getElementsByClassName('source')[0];
+const sourceLink = document.getElementsByClassName('source')[0] || {style: {removeProperty: () => {}}};
 
 export const browser = {unknown: 0, firefox: 1, chrome: 2, edge: 3, safari: 4}
 export const platform = {unknown: 0, windows: 1, linux: 2, macos: 3, android: 4,}

@@ -8,8 +8,8 @@ import {
     KEY_PRESSED,
     KEY_RELEASED
 } from 'event';
-import {env, browser as br, platform} from 'env';
 import {KEY} from 'input';
+import {getControllerMap} from './controllerMaps.js?v=5';
 import {log} from 'log';
 
 const deadZone = 0.1;
@@ -19,6 +19,7 @@ let joystickAxes = [];
 let joystickIdx;
 let joystickTimer = null;
 let dpadMode = true;
+let currentSystem = '';
 
 function onDpadToggle(checked) {
     if (dpadMode === checked) {
@@ -96,145 +97,10 @@ const onGamepadConnected = (e) => {
 
     joystickIdx = gamepad.index;
 
-    // Ref: https://github.com/giongto35/cloud-game/issues/14
-    // get mapping first (default KeyMap2)
-    const os = env.getOs;
-    const browser = env.getBrowser;
-
-    if (os === platform.android) {
-        // default of android is KeyMap1
-        joystickMap = {
-            2: KEY.A,
-            0: KEY.B,
-            3: KEY.START,
-            4: KEY.SELECT,
-            10: KEY.LOAD,
-            11: KEY.SAVE,
-            8: KEY.HELP,
-            9: KEY.QUIT,
-            12: KEY.UP,
-            13: KEY.DOWN,
-            14: KEY.LEFT,
-            15: KEY.RIGHT
-        };
-    } else {
-        // default of other OS is KeyMap2
-        joystickMap = {
-            0: KEY.A,
-            1: KEY.B,
-            2: KEY.START,
-            3: KEY.SELECT,
-            8: KEY.LOAD,
-            9: KEY.SAVE,
-            6: KEY.HELP,
-            7: KEY.QUIT,
-            12: KEY.UP,
-            13: KEY.DOWN,
-            14: KEY.LEFT,
-            15: KEY.RIGHT
-        };
-    }
-
-    if (os === platform.android && browser === br.firefox) { //KeyMap2
-        joystickMap = {
-            0: KEY.A,
-            1: KEY.B,
-            2: KEY.START,
-            3: KEY.SELECT,
-            8: KEY.LOAD,
-            9: KEY.SAVE,
-            6: KEY.HELP,
-            7: KEY.QUIT,
-            12: KEY.UP,
-            13: KEY.DOWN,
-            14: KEY.LEFT,
-            15: KEY.RIGHT
-        };
-    }
-
-    if (os === platform.windows && browser === br.firefox) { //KeyMap3
-        joystickMap = {
-            1: KEY.A,
-            2: KEY.B,
-            0: KEY.START,
-            3: KEY.SELECT,
-            8: KEY.LOAD,
-            9: KEY.SAVE,
-            6: KEY.HELP,
-            7: KEY.QUIT
-        };
-    }
-
-    if (os === platform.macos && browser === br.safari) { //KeyMap4
-        joystickMap = {
-            1: KEY.A,
-            2: KEY.B,
-            0: KEY.START,
-            3: KEY.SELECT,
-            8: KEY.LOAD,
-            9: KEY.SAVE,
-            6: KEY.HELP,
-            7: KEY.QUIT,
-            14: KEY.UP,
-            15: KEY.DOWN,
-            16: KEY.LEFT,
-            17: KEY.RIGHT
-        };
-    }
-
-    if (os === platform.macos && browser === br.firefox) { //KeyMap5
-        joystickMap = {
-            1: KEY.A,
-            2: KEY.B,
-            0: KEY.START,
-            3: KEY.SELECT,
-            8: KEY.LOAD,
-            9: KEY.SAVE,
-            6: KEY.HELP,
-            7: KEY.QUIT,
-            14: KEY.UP,
-            15: KEY.DOWN,
-            16: KEY.LEFT,
-            17: KEY.RIGHT
-        };
-    }
-
-    // https://bugs.chromium.org/p/chromium/issues/detail?id=1076272
-    if (gamepad.id.includes('PLAYSTATION(R)3')) {
-        if (browser === br.chrome) {
-            joystickMap = {
-                1: KEY.A,
-                0: KEY.B,
-                2: KEY.Y,
-                3: KEY.X,
-                4: KEY.L,
-                5: KEY.R,
-                8: KEY.SELECT,
-                9: KEY.START,
-                10: KEY.DTOGGLE,
-                11: KEY.R3,
-            };
-        } else {
-            joystickMap = {
-                13: KEY.A,
-                14: KEY.B,
-                12: KEY.X,
-                15: KEY.Y,
-                3: KEY.START,
-                0: KEY.SELECT,
-                4: KEY.UP,
-                6: KEY.DOWN,
-                7: KEY.LEFT,
-                5: KEY.RIGHT,
-                10: KEY.L,
-                11: KEY.R,
-                8: KEY.L2,
-                9: KEY.R2,
-                1: KEY.DTOGGLE,
-                2: KEY.R3,
-            };
-        }
-    }
+    // Load controller map for the current system
+    const map = getControllerMap(currentSystem);
+    joystickMap = map.buttons;
+    dpadMode = map.dpadMode;
 
     // reset state
     joystickState = {[KEY.LEFT]: false, [KEY.RIGHT]: false, [KEY.UP]: false, [KEY.DOWN]: false};
@@ -274,9 +140,10 @@ sub(DPAD_TOGGLE, (data) => onDpadToggle(data.checked));
  * @version 1
  */
 export const joystick = {
-    // setSystem: optional hook used by v5+ app.js to hint per-system button maps.
-    // Stubbed here so mixed web volumes don't crash with "setSystem is not a function".
-    setSystem: (_system) => { /* no-op for Phase 3 */ },
+    setSystem: (system) => {
+        currentSystem = system || '';
+        log.info('[input] controller map set for system: ' + (system || 'default'));
+    },
     init: () => {
         // we only capture the last plugged joystick
         window.addEventListener('gamepadconnected', onGamepadConnected);

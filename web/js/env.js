@@ -6,7 +6,7 @@ import {
 // UI
 const page = document.getElementsByTagName('html')[0];
 const gameBoy = document.getElementById('gamebody');
-const sourceLink = document.getElementsByClassName('source')[0] || {style: {removeProperty: () => {}}};
+const sourceLink = document.getElementsByClassName('source')[0] || { style: {} };
 
 export const browser = {unknown: 0, firefox: 1, chrome: 2, edge: 3, safari: 4}
 export const platform = {unknown: 0, windows: 1, linux: 2, macos: 3, android: 4,}
@@ -38,18 +38,9 @@ const fixScreenLayout = () => {
 };
 
 const rescaleGameBoy = (targetWidth, targetHeight) => {
-    const transformations = ['translate(-50%, -50%)'];
-
-    if (isLayoutSwitched) {
-        transformations.push('rotate(90deg)');
-        [targetWidth, targetHeight] = [targetHeight, targetWidth]
-    }
-
-    // scale, fit to target size
-    const scale = Math.min(targetWidth / getWidth(gameBoy), targetHeight / getHeight(gameBoy));
-    transformations.push(`scale(${scale})`);
-
-    gameBoy.style['transform'] = transformations.join(' ');
+    // No-op: gamebody fills the viewport via CSS (position: fixed; inset: 0)
+    // The old rotate/scale transform caused layout issues on mobile portrait screens.
+    gameBoy.style['transform'] = '';
 }
 
 new MutationObserver(() => pub(TRANSFORM_CHANGE)).observe(gameBoy, {attributeFilter: ['style']})

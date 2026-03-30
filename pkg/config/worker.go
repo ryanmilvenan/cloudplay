@@ -72,6 +72,11 @@ type Video struct {
 		Bitrate          uint
 		KeyframeInterval uint
 	}
+	Nvenc struct {
+		Bitrate int
+		Preset  string
+		Tune    string
+	}
 }
 
 // allows custom config path

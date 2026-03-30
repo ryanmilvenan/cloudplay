@@ -6,6 +6,7 @@ import (
 
 	"github.com/giongto35/cloud-game/v3/pkg/config"
 	"github.com/giongto35/cloud-game/v3/pkg/encoder/h264"
+	"github.com/giongto35/cloud-game/v3/pkg/encoder/nvenc"
 	"github.com/giongto35/cloud-game/v3/pkg/encoder/vpx"
 	"github.com/giongto35/cloud-game/v3/pkg/encoder/yuv"
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
@@ -35,10 +36,11 @@ type Video struct {
 type VideoCodec string
 
 const (
-	H264 VideoCodec = "h264"
-	VP8  VideoCodec = "vp8"
-	VP9  VideoCodec = "vp9"
-	VPX  VideoCodec = "vpx"
+	H264     VideoCodec = "h264"
+	H264NVENC VideoCodec = "h264_nvenc"
+	VP8      VideoCodec = "vp8"
+	VP9      VideoCodec = "vp9"
+	VPX      VideoCodec = "vpx"
 )
 
 // NewVideoEncoder returns new video encoder.
@@ -54,6 +56,9 @@ func NewVideoEncoder(w, h, dw, dh int, scale float64, conf config.Video, log *lo
 	case H264:
 		opts := h264.Options(conf.H264)
 		enc, err = h264.NewEncoder(dw, dh, conf.Threads, &opts)
+	case H264NVENC:
+		opts := nvenc.Options(conf.Nvenc)
+		enc, err = nvenc.NewEncoder(dw, dh, &opts)
 	case VP8, VP9, VPX:
 		opts := vpx.Options(conf.Vpx)
 		v := 8

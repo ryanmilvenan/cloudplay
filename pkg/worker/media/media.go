@@ -12,6 +12,22 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/app"
 )
 
+// ZeroCopyVideoEncoder is the interface for Phase 3 GPU-only encode.
+//
+// Implementations (e.g. NVENC) receive a CUDA device pointer directly from
+// the Vulkan external-memory import and encode without touching the CPU.
+//
+// EncodeFromDevPtr takes a CUDA device pointer and the byte size of the
+// frame buffer (width*height*4 for RGBA8).  It returns the encoded H264
+// NAL bytes, or nil if the encoder is still buffering (EAGAIN).
+//
+// ⚠ EXPERIMENTAL: GPU RGBA→NV12 colour conversion is not yet a proper
+// CUDA/NPP kernel; the current path produces incorrect colours.
+// See pkg/encoder/nvenc/nvenc_cuda.go TODO for details.
+type ZeroCopyVideoEncoder interface {
+	EncodeFromDevPtr(cudaDevPtr uintptr, size uint64) ([]byte, error)
+}
+
 const audioHz = 48000
 
 type samples []int16
@@ -57,6 +73,16 @@ type WebrtcMediaPipe struct {
 	oldPf   uint32
 	oldRot  uint
 	oldFlip bool
+
+	// Phase 3 zero-copy path.
+	// zcEnc is non-nil only when zeroCopyEnabled is true AND NVENC+Vulkan are
+	// both available at runtime.  When non-nil, ProcessVideoDevPtr drives
+	// encoding directly from a CUDA device pointer without CPU involvement.
+	//
+	// ⚠ EXPERIMENTAL: colour conversion is incomplete — see ZeroCopyVideoEncoder.
+	zcMu            sync.RWMutex
+	zcEnc           ZeroCopyVideoEncoder
+	zeroCopyEnabled bool // mirrors config.Video.ZeroCopy
 }
 
 func NewWebRtcMediaPipe(ac config.Audio, vc config.Video, log *logger.Logger) *WebrtcMediaPipe {
@@ -144,8 +170,86 @@ func (wmp *WebrtcMediaPipe) initVideo(w, h int, scale float64, conf config.Video
 
 func round(x int, scale float64) int { return (int(float64(x)*scale) + 1) & ^1 }
 
+// ProcessVideo encodes one video frame and returns H264 NAL bytes.
+//
+// Routing:
+//   - If the Phase 3 zero-copy path is armed (ZeroCopyActive == true), it
+//     attempts GPU-direct encoding via ProcessVideoZeroCopy first.
+//   - On success (non-nil result) the zero-copy bytes are returned.
+//   - On failure or nil (EAGAIN / fd not yet ready), falls through to the
+//     standard CPU readback path.
+//
+// The CPU fallback ensures backward compatibility with non-Vulkan/non-NVENC
+// builds and guarantees continued operation when zero-copy is gated off.
 func (wmp *WebrtcMediaPipe) ProcessVideo(v app.Video) []byte {
+	// Phase 3 fast path: attempt zero-copy GPU encode.
+	if wmp.ZeroCopyActive() {
+		if out := wmp.ProcessVideoZeroCopy(); out != nil {
+			return out
+		}
+		// Zero-copy returned nil (first frame before fd is ready, EAGAIN, or
+		// encode error).  Fall through to CPU path silently.
+	}
+
+	// CPU path: standard YUV conversion + software / NVENC CPU-upload encode.
 	return wmp.Video().Encode(encoder.InFrame(v.Frame))
+}
+
+// SetZeroCopyEncoder registers the NVENC encoder for the Phase 3 path and
+// marks zero-copy as active for this pipe.  Pass nil to disable.
+//
+// Must be called before the first ProcessVideoDevPtr invocation.
+// Thread-safe.
+func (wmp *WebrtcMediaPipe) SetZeroCopyEncoder(enc ZeroCopyVideoEncoder) {
+	wmp.zcMu.Lock()
+	wmp.zcEnc = enc
+	wmp.zeroCopyEnabled = enc != nil && wmp.vConf.ZeroCopy
+	wmp.zcMu.Unlock()
+	if wmp.zeroCopyEnabled {
+		wmp.log.Info().Msg("media: Phase 3 zero-copy NVENC path armed (⚠ experimental — colours may be wrong)")
+	}
+}
+
+// ZeroCopyActive reports whether the Phase 3 zero-copy path is armed and
+// ready for use.  Returns false if the config flag is off or no encoder is set.
+func (wmp *WebrtcMediaPipe) ZeroCopyActive() bool {
+	wmp.zcMu.RLock()
+	ok := wmp.zeroCopyEnabled && wmp.zcEnc != nil
+	wmp.zcMu.RUnlock()
+	return ok
+}
+
+// ProcessVideoZeroCopy encodes one frame via the Phase 3 zero-copy path.
+//
+// The actual CUDA device pointer is managed internally by the ZeroCopyVideoEncoder
+// implementation (see lazyZeroCopyNVENC in zerocopy.go).  The encoder imports
+// the Vulkan external-memory fd on first call and caches the devPtr for the
+// session lifetime — the caller does not need to manage memory handles.
+//
+// Returns nil if the encoder is still buffering (EAGAIN), if the fd is not
+// yet available (before the first frame), or if the zero-copy path is not
+// armed.  Callers must fall back to ProcessVideo on nil.
+//
+// ⚠ EXPERIMENTAL: GPU RGBA→NV12 colour conversion is not yet correct.
+// See pkg/encoder/nvenc/nvenc_cuda.go for the TODO.
+func (wmp *WebrtcMediaPipe) ProcessVideoZeroCopy() []byte {
+	wmp.zcMu.RLock()
+	enc := wmp.zcEnc
+	ok := wmp.zeroCopyEnabled
+	wmp.zcMu.RUnlock()
+
+	if !ok || enc == nil {
+		return nil
+	}
+
+	// Pass (0, 0) — the lazyZeroCopyNVENC implementation ignores these args
+	// and manages devPtr + bufSize internally via its getFd closure.
+	out, err := enc.EncodeFromDevPtr(0, 0)
+	if err != nil {
+		wmp.log.Error().Err(err).Msg("media: zero-copy encode error")
+		return nil
+	}
+	return out
 }
 
 func (wmp *WebrtcMediaPipe) Reinit() error {

@@ -160,3 +160,9 @@ func (n *Nanoarch) IsZeroCopyAvailable() bool {
 	}
 	return n.vulkan.ctx.IsZeroCopyAvailable()
 }
+
+// ZeroCopyFd returns the Linux fd for the exportable Vulkan device memory
+// of the current frame.  Delegates to vulkanZeroCopyFd.
+func (n *Nanoarch) ZeroCopyFd(w, h uint) (int, error) {
+	return vulkanZeroCopyFd(w, h)
+}

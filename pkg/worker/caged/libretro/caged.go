@@ -100,3 +100,11 @@ func (c *Caged) SetSaveOnClose(v bool)            { c.base.SaveOnClose = v }
 func (c *Caged) SetSessionId(name string)         { c.base.SetSessionId(name) }
 func (c *Caged) Close()                           { c.Emulator.Close() }
 func (c *Caged) IsSupported() error               { return c.base.IsSupported() }
+
+// IsZeroCopyAvailable reports whether the Phase 3 Vulkan→CUDA→NVENC path is
+// structurally available (Vulkan context active + device has external memory).
+func (c *Caged) IsZeroCopyAvailable() bool { return c.base.IsZeroCopyAvailable() }
+
+// ZeroCopyFd returns the Linux fd for the exportable Vulkan device memory of
+// the current rendered frame.  Returns (-1, err) when unavailable.
+func (c *Caged) ZeroCopyFd(w, h uint) (int, error) { return c.base.ZeroCopyFd(w, h) }

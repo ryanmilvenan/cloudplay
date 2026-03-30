@@ -374,6 +374,20 @@ encoder:
       bitrate: 1200
       # force keyframe interval
       keyframeInterval: 5
+    # h264_nvenc encoder settings (used when codec: h264_nvenc)
+    nvenc:
+      # target bitrate in kbps (CBR mode)
+      bitrate: 4000
+      # NVENC preset: p1 (fastest) … p7 (best quality)
+      preset: p4
+      # NVENC tune: ll (low latency), ull (ultra-low latency), hq (high quality)
+      tune: ll
+    # Phase 3 Vulkan→CUDA→NVENC zero-copy encode path.
+    # Requires: codec=h264_nvenc, Vulkan HW render core, NVIDIA Linux driver.
+    # ⚠ EXPERIMENTAL / INCOMPLETE: GPU colour conversion (RGBA→NV12) is not
+    #   yet implemented correctly — enable only for development/testing of the
+    #   plumbing (see pkg/encoder/nvenc/nvenc_cuda.go TODO).
+    zeroCopy: false
 
 # game recording
 # (experimental)

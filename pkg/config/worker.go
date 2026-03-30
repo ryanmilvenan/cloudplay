@@ -77,6 +77,23 @@ type Video struct {
 		Preset  string
 		Tune    string
 	}
+	// ZeroCopy enables the Phase 3 Vulkan→CUDA→NVENC zero-copy encode path.
+	//
+	// When true and all of the following hold at runtime, pixel data bypasses
+	// the CPU entirely (Vulkan blit → exportable fd → CUDA devptr → NVENC):
+	//   - codec == "h264_nvenc"
+	//   - Vulkan HW render context is active (core requested Vulkan)
+	//   - The Vulkan device supports VK_KHR_external_memory_fd (NVIDIA Linux)
+	//
+	// Default: false (safe CPU-readback path is always used when false).
+	//
+	// ⚠ EXPERIMENTAL / INCOMPLETE: GPU colour conversion (RGBA→NV12) is not
+	// yet a proper CUDA/NPP kernel.  The current implementation copies the raw
+	// RGBA device bytes into the NVENC hw_frame surface, which produces
+	// incorrect colours.  Enable only for development and testing of the
+	// plumbing; do not use in production until the colour conversion TODO in
+	// pkg/encoder/nvenc/nvenc_cuda.go is resolved.
+	ZeroCopy bool
 }
 
 // allows custom config path

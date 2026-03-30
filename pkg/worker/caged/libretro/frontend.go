@@ -497,6 +497,34 @@ func (f *Frontend) IsSupported() error {
 	return graphics.TryInit()
 }
 
+// IsZeroCopyAvailable reports whether the Phase 3 Vulkan→CUDA→NVENC
+// zero-copy path is structurally available for this session.
+//
+// Returns true only when:
+//   - The vulkan build tag is active
+//   - The core requested (and received) a Vulkan HW render context
+//   - The Vulkan device supports VK_KHR_external_memory_fd (NVIDIA Linux)
+//
+// NOTE: A true return here does not mean the path is currently enabled —
+// the config flag (Video.ZeroCopy) and codec (h264_nvenc) are checked
+// separately in the media pipe setup.
+func (f *Frontend) IsZeroCopyAvailable() bool {
+	return f.nano.IsZeroCopyAvailable()
+}
+
+// ZeroCopyFd returns the Linux file descriptor for the exportable Vulkan
+// device memory of the current frame (width w × height h in pixels).
+//
+// Must be called after a frame has been rendered.  Returns (-1, err) when
+// Phase 3 is not available or the blit has not been performed yet.
+//
+// The fd is owned by the Vulkan allocation and must NOT be closed by the
+// caller.  CUDA keeps the import mapping alive for the lifetime of the
+// allocation.
+func (f *Frontend) ZeroCopyFd(w, h uint) (int, error) {
+	return f.nano.ZeroCopyFd(w, h)
+}
+
 func (f *Frontend) autosave(periodSec int) {
 	f.log.Info().Msgf("Autosave every [%vs]", periodSec)
 	ticker := time.NewTicker(time.Duration(periodSec) * time.Second)

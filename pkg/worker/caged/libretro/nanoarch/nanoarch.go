@@ -65,6 +65,10 @@ type Nanoarch struct {
 		hw     *C.struct_retro_hw_render_callback
 		PixFmt PixFmt
 	}
+	// vulkan holds the Vulkan context state.  Populated only when the core
+	// requests RETRO_HW_CONTEXT_VULKAN and the `vulkan` build tag is active;
+	// otherwise it's an empty zero-value struct (see nanoarch_novulkan.go).
+	vulkan                   vulkanState
 	vfr                      bool
 	Aspect                   bool
 	sdlCtx                   *graphics.SDL
@@ -319,7 +323,15 @@ func (n *Nanoarch) LoadGame(path string) error {
 
 	n.Stopped.Store(false)
 
-	if n.Video.gl.enabled {
+	if n.vulkan.enabled {
+		// Vulkan init: headless — no SDL, no thread pinning required.
+		// initVulkanVideo creates the context and fires context_reset.
+		if n.LibCo {
+			C.same_thread(C.init_video_cgo)
+		} else {
+			initVulkanVideo()
+		}
+	} else if n.Video.gl.enabled {
 		if n.LibCo {
 			C.same_thread(C.init_video_cgo)
 			C.same_thread(unsafe.Pointer(Nan0.Video.hw.context_reset))
@@ -355,7 +367,7 @@ func (n *Nanoarch) Shutdown() {
 		thread.Main(func() {
 			C.same_thread(retroUnloadGame)
 			C.same_thread(retroDeinit)
-			if n.Video.gl.enabled {
+			if n.vulkan.enabled || n.Video.gl.enabled {
 				C.same_thread(C.deinit_video_cgo)
 			}
 			C.same_thread(C.same_thread_stop)
@@ -372,7 +384,10 @@ func (n *Nanoarch) Shutdown() {
 		}
 		C.bridge_call(retroUnloadGame)
 		C.bridge_call(retroDeinit)
-		if n.Video.gl.enabled {
+		if n.vulkan.enabled {
+			// Vulkan teardown: no thread pinning needed.
+			deinitVulkanVideo()
+		} else if n.Video.gl.enabled {
 			thread.Main(func() {
 				deinitVideo()
 				runtime.UnlockOSThread()
@@ -410,14 +425,17 @@ func (n *Nanoarch) Run() {
 	if n.LibCo {
 		C.same_thread(retroRun)
 	} else {
-		if n.Video.gl.enabled {
+		// GL requires the OS thread to be locked for the duration of the call
+		// so that the OpenGL context stays current.  Vulkan handles are not
+		// thread-bound — no locking needed.
+		if n.Video.gl.enabled && !n.vulkan.enabled {
 			runtime.LockOSThread()
 			if err := n.sdlCtx.BindContext(); err != nil {
 				n.log.Error().Err(err).Msg("ctx bind fail")
 			}
 		}
 		C.bridge_call(retroRun)
-		if n.Video.gl.enabled {
+		if n.Video.gl.enabled && !n.vulkan.enabled {
 			runtime.UnlockOSThread()
 		}
 	}
@@ -670,8 +688,11 @@ func coreVideoRefresh(data unsafe.Pointer, width, height uint, packed uint) {
 	if data != C.RETRO_HW_FRAME_BUFFER_VALID {
 		//noinspection GoRedundantConversion
 		data_ = unsafe.Slice((*byte)(data), bytes)
+	} else if Nan0.vulkan.enabled {
+		// Vulkan HW render: read back from Vulkan staging buffer.
+		data_ = readVulkanFramebuffer(bytes, width, height)
 	} else {
-		// if Libretro renders frame with OpenGL context
+		// GL HW render: read back via glReadPixels into FBO.
 		data_ = graphics.ReadFramebuffer(bytes, width, height)
 	}
 
@@ -794,10 +815,24 @@ func coreEnvironment(cmd C.unsigned, data unsafe.Pointer) C.bool {
 		}
 		return false
 	case C.RETRO_ENVIRONMENT_SET_HW_RENDER:
+		hw := (*C.struct_retro_hw_render_callback)(data)
+		if hw.context_type == C.RETRO_HW_CONTEXT_VULKAN {
+			// Delegate to Vulkan wiring (nanoarch_vulkan.go).
+			// On !vulkan builds handleVulkanHWRender returns false.
+			if handleVulkanHWRender(data) {
+				return true
+			}
+			return false
+		}
 		if Nan0.Video.gl.enabled {
-			Nan0.Video.hw = (*C.struct_retro_hw_render_callback)(data)
+			Nan0.Video.hw = hw
 			Nan0.Video.hw.get_current_framebuffer = (C.retro_hw_get_current_framebuffer_t)(C.core_get_current_framebuffer_cgo)
 			Nan0.Video.hw.get_proc_address = (C.retro_hw_get_proc_address_t)(C.core_get_proc_address_cgo)
+			return true
+		}
+		return false
+	case C.RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE:
+		if handleGetHWRenderInterface(data) {
 			return true
 		}
 		return false
@@ -836,6 +871,12 @@ func coreEnvironment(cmd C.unsigned, data unsafe.Pointer) C.bool {
 
 //export initVideo
 func initVideo() {
+	// Vulkan path: create headless context, skip SDL/GL entirely.
+	if Nan0.vulkan.enabled {
+		initVulkanVideo()
+		return
+	}
+
 	var context graphics.Context
 	switch Nan0.Video.hw.context_type {
 	case C.RETRO_HW_CONTEXT_NONE:
@@ -882,6 +923,13 @@ func initVideo() {
 
 //export deinitVideo
 func deinitVideo() {
+	// Vulkan path: tear down headless context, skip SDL.
+	if Nan0.vulkan.enabled {
+		deinitVulkanVideo()
+		Nan0.hackSkipSameThreadSave = false
+		return
+	}
+
 	if !Nan0.hackSkipHwContextDestroy {
 		C.bridge_context_reset(Nan0.Video.hw.context_destroy)
 	}

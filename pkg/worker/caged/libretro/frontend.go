@@ -377,7 +377,11 @@ func (f *Frontend) LoadGame(path string) error {
 func (f *Frontend) AspectRatio() float32          { return f.nano.AspectRatio() }
 func (f *Frontend) AudioSampleRate() int          { return f.nano.AudioSampleRate() }
 func (f *Frontend) FPS() int                      { return f.nano.VideoFramerate() }
-func (f *Frontend) Flipped() bool                 { return f.nano.IsGL() }
+// Flipped reports whether video frames from the emulator are rendered upside
+// down and need to be vertically flipped before display.  GL (OpenGL) renders
+// with the origin at the bottom-left corner, so its frames must be flipped.
+// Vulkan uses the standard top-left origin — no flip needed.
+func (f *Frontend) Flipped() bool { return f.nano.IsGL() && !f.nano.IsVulkan() }
 func (f *Frontend) FrameSize() (int, int)         { return f.nano.BaseWidth(), f.nano.BaseHeight() }
 func (f *Frontend) HasSave() bool                 { return os.Exists(f.HashPath()) }
 func (f *Frontend) HashPath() string              { return f.storage.GetSavePath() }

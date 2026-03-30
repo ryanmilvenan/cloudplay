@@ -5,7 +5,10 @@
 // that callers can fall back to the GL pipeline gracefully.
 package vulkan
 
-import "errors"
+import (
+	"errors"
+	"unsafe"
+)
 
 var ErrUnsupported = errors.New("vulkan: not compiled in (rebuild with -tags vulkan)")
 
@@ -23,5 +26,6 @@ type VulkanContext struct{}
 func NewVulkanContext(_ Config) (*VulkanContext, error) { return nil, ErrUnsupported }
 
 func (v *VulkanContext) ReadFramebuffer(size, w, h uint) []byte { return make([]byte, size) }
+func (v *VulkanContext) RenderInterface() unsafe.Pointer        { return nil }
 func (v *VulkanContext) Deinit() error                          { return nil }
 func (v *VulkanContext) IsVulkan() bool                         { return false }

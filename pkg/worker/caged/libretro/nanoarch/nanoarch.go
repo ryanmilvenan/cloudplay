@@ -313,8 +313,8 @@ func (n *Nanoarch) LoadGame(path string) error {
 	}
 	n.sys.av = av
 
-	n.serializeSize = C.bridge_retro_serialize_size(retroSerializeSize)
-	n.log.Info().Msgf("Save file size: %v", byteCountBinary(int64(n.serializeSize)))
+	n.serializeSize = 0
+	n.log.Debug().Msg("Save file size will be queried on demand")
 
 	Nan0.tickTime = int64(time.Second / time.Duration(n.sys.av.timing.fps))
 	if n.vfr {
@@ -811,6 +811,13 @@ func coreEnvironment(cmd C.unsigned, data unsafe.Pointer) C.bool {
 			// cast to C string and set the value
 			rv.value = (*C.char)(ptr)
 			Nan0.log.Debug().Msgf("Set %v=%v", key, v)
+			return true
+		}
+		return false
+	case C.RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER:
+		if preferredHWContextIsVulkan() {
+			*(*C.enum_retro_hw_context_type)(data) = C.RETRO_HW_CONTEXT_VULKAN
+			Nan0.log.Debug().Msg("Advertising Vulkan as preferred HW render context")
 			return true
 		}
 		return false

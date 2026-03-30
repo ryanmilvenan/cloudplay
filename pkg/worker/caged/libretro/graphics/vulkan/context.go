@@ -10,6 +10,54 @@ package vulkan
 #include <stdlib.h>
 #include <string.h>
 
+static uint32_t cloudplay_vk_make_version(uint32_t major, uint32_t minor, uint32_t patch) {
+    return VK_MAKE_VERSION(major, minor, patch);
+}
+
+static VkResult cloudplay_vk_create_instance(const char *app_name, const char *engine_name, VkInstance *out_instance) {
+    VkApplicationInfo app_info = {
+        .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+        .pApplicationName = app_name,
+        .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
+        .pEngineName = engine_name,
+        .engineVersion = VK_MAKE_VERSION(1, 0, 0),
+        .apiVersion = VK_API_VERSION_1_1,
+    };
+
+    VkInstanceCreateInfo instance_info = {
+        .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .pApplicationInfo = &app_info,
+    };
+
+    return vkCreateInstance(&instance_info, NULL, out_instance);
+}
+
+static VkResult cloudplay_vk_create_device(
+    VkPhysicalDevice phys_device,
+    uint32_t queue_family_index,
+    uint32_t extension_count,
+    const char *const *extension_names,
+    VkDevice *out_device)
+{
+    const float queue_priority = 1.0f;
+    VkDeviceQueueCreateInfo queue_info = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .queueFamilyIndex = queue_family_index,
+        .queueCount = 1,
+        .pQueuePriorities = &queue_priority,
+    };
+
+    VkDeviceCreateInfo device_info = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .queueCreateInfoCount = 1,
+        .pQueueCreateInfos = &queue_info,
+        .enabledExtensionCount = extension_count,
+        .ppEnabledExtensionNames = extension_names,
+    };
+
+    return vkCreateDevice(phys_device, &device_info, NULL, out_device);
+}
+
 // Helper: find a queue family that supports graphics
 static uint32_t find_graphics_queue_family(VkPhysicalDevice device) {
     uint32_t count = 0;
@@ -92,21 +140,7 @@ func NewContext() (*Context, error) {
 	defer C.free(unsafe.Pointer(appName))
 	defer C.free(unsafe.Pointer(engName))
 
-	appInfo := C.VkApplicationInfo{
-		sType:              C.VK_STRUCTURE_TYPE_APPLICATION_INFO,
-		pApplicationName:   appName,
-		applicationVersion: C.VK_MAKE_VERSION(1, 0, 0),
-		pEngineName:        engName,
-		engineVersion:      C.VK_MAKE_VERSION(1, 0, 0),
-		apiVersion:         C.VK_API_VERSION_1_1,
-	}
-
-	instanceInfo := C.VkInstanceCreateInfo{
-		sType:            C.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-		pApplicationInfo: &appInfo,
-	}
-
-	if res := C.vkCreateInstance(&instanceInfo, nil, &ctx.Instance); res != C.VK_SUCCESS {
+	if res := C.cloudplay_vk_create_instance(appName, engName, &ctx.Instance); res != C.VK_SUCCESS {
 		return nil, fmt.Errorf("vulkan: vkCreateInstance failed: %d", int(res))
 	}
 
@@ -128,21 +162,6 @@ func NewContext() (*Context, error) {
 	}
 	ctx.QueueFamily = uint32(qf)
 
-	// ── Logical Device ────────────────────────────────────────────────────
-	queuePriority := C.float(1.0)
-	queueInfo := C.VkDeviceQueueCreateInfo{
-		sType:            C.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-		queueFamilyIndex: qf,
-		queueCount:       1,
-		pQueuePriorities: &queuePriority,
-	}
-
-	deviceInfo := C.VkDeviceCreateInfo{
-		sType:                C.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-		queueCreateInfoCount: 1,
-		pQueueCreateInfos:    &queueInfo,
-	}
-
 	// Request optional Phase 3 extensions (VK_KHR_external_memory_fd on
 	// linux+nvenc builds).  We first try with the extensions enabled; if the
 	// driver rejects them we fall back to a baseline device.
@@ -152,16 +171,26 @@ func NewContext() (*Context, error) {
 		for i, e := range extNames {
 			cExts[i] = C.CString(e)
 		}
-		deviceInfo.enabledExtensionCount = C.uint32_t(len(cExts))
-		deviceInfo.ppEnabledExtensionNames = &cExts[0]
 
-		if res := C.vkCreateDevice(ctx.PhysDevice, &deviceInfo, nil, &ctx.Device); res == C.VK_SUCCESS {
+		extMem := C.malloc(C.size_t(len(cExts)) * C.size_t(unsafe.Sizeof(uintptr(0))))
+		if extMem == nil {
+			for _, p := range cExts {
+				C.free(unsafe.Pointer(p))
+			}
+			C.vkDestroyInstance(ctx.Instance, nil)
+			return nil, errors.New("vulkan: failed to allocate extension name array")
+		}
+		extArray := unsafe.Slice((**C.char)(extMem), len(cExts))
+		for i, p := range cExts {
+			extArray[i] = p
+		}
+
+		if res := C.cloudplay_vk_create_device(ctx.PhysDevice, qf, C.uint32_t(len(cExts)), (**C.char)(extMem), &ctx.Device); res == C.VK_SUCCESS {
 			ctx.ExternalMemoryEnabled = true
 		} else {
 			// Extension(s) not supported on this driver — retry without them.
-			deviceInfo.enabledExtensionCount = 0
-			deviceInfo.ppEnabledExtensionNames = nil
-			if res2 := C.vkCreateDevice(ctx.PhysDevice, &deviceInfo, nil, &ctx.Device); res2 != C.VK_SUCCESS {
+			if res2 := C.cloudplay_vk_create_device(ctx.PhysDevice, qf, 0, nil, &ctx.Device); res2 != C.VK_SUCCESS {
+				C.free(extMem)
 				for _, p := range cExts {
 					C.free(unsafe.Pointer(p))
 				}
@@ -170,11 +199,12 @@ func NewContext() (*Context, error) {
 			}
 			// ExternalMemoryEnabled stays false.
 		}
+		C.free(extMem)
 		for _, p := range cExts {
 			C.free(unsafe.Pointer(p))
 		}
 	} else {
-		if res := C.vkCreateDevice(ctx.PhysDevice, &deviceInfo, nil, &ctx.Device); res != C.VK_SUCCESS {
+		if res := C.cloudplay_vk_create_device(ctx.PhysDevice, qf, 0, nil, &ctx.Device); res != C.VK_SUCCESS {
 			C.vkDestroyInstance(ctx.Instance, nil)
 			return nil, fmt.Errorf("vulkan: vkCreateDevice failed: %d", int(res))
 		}

@@ -37,6 +37,10 @@ type vulkanState struct {
 // render context.
 func (n *Nanoarch) IsVulkan() bool { return n.vulkan.enabled }
 
+// preferredHWContextIsVulkan tells the core environment callback to advertise
+// Vulkan as the preferred hardware render path on Vulkan-enabled builds.
+func preferredHWContextIsVulkan() bool { return true }
+
 // ── Environment callback handlers ─────────────────────────────────────────
 
 // handleVulkanHWRender is called from coreEnvironment when the core sends

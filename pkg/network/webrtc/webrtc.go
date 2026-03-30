@@ -150,7 +150,7 @@ func (p *Peer) SetRemoteSDP(sdp string, decoder Decoder) error {
 }
 
 func newTrack(id string, label string, codec string) (*webrtc.TrackLocalStaticSample, error) {
-	codec = strings.ToLower(codec)
+	codec = normalizeCodec(codec)
 	var mime string
 	switch id {
 	case "audio":
@@ -172,6 +172,17 @@ func newTrack(id string, label string, codec string) (*webrtc.TrackLocalStaticSa
 		return nil, fmt.Errorf("unsupported codec %s:%s", id, codec)
 	}
 	return webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: mime}, id, label)
+}
+
+func normalizeCodec(codec string) string {
+	codec = strings.ToLower(strings.TrimSpace(codec))
+
+	switch codec {
+	case "h264_nvenc":
+		return "h264"
+	default:
+		return codec
+	}
 }
 
 func (p *Peer) handleICECandidate(callback func(any)) func(*webrtc.ICECandidate) {

@@ -36,7 +36,7 @@ dpadToggle.addEventListener('change', (e) => {
 
 const getKey = (el) => el.dataset.key
 
-let dpadMode = true;
+let dpadMode = false;
 const deadZone = 0.1;
 
 let enabled = false
@@ -241,7 +241,12 @@ function handleMenuUp(evt) {
 function handleWindowMove(event) {
     if (!enabled) return
 
-    event.preventDefault();
+    // Only prevent default (and block native scroll) when a control touch is active.
+    // If neither the vpad nor the menu has a tracked touch, this may be a scroll
+    // gesture on the game list — let the browser handle it.
+    if (vpadTouchDrag !== null || menuTouchDrag !== null) {
+        event.preventDefault();
+    }
     handleVpadJoystickMove(event);
     handleMenuMove(event);
 

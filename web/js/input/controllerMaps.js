@@ -1,7 +1,8 @@
 /**
  * Per-system controller mappings.
  *
- * Each map translates Standard Gamepad API button indices to KEY constants.
+ * Each map translates Standard Gamepad API button indices to KEY constants
+ * and declares whether the platform expects analog sticks / triggers.
  * See: https://w3c.github.io/gamepad/#remapping
  *
  * Standard Gamepad buttons:
@@ -12,9 +13,16 @@
 
 import {KEY} from 'input';
 
-// Default: 1:1 Xbox → retro mapping, dpad mode (analog stick → digital)
-const defaultMap = {
-    dpadMode: true,
+const makeMap = ({analogAxes = false, analogTriggers = false, buttons}) => ({
+    analogAxes,
+    analogTriggers,
+    buttons,
+});
+
+// Default: 1:1 Xbox → retro mapping, keep analog sticks/triggers enabled.
+const defaultMap = makeMap({
+    analogAxes: true,
+    analogTriggers: true,
     buttons: {
         0: KEY.A,
         1: KEY.B,
@@ -32,22 +40,23 @@ const defaultMap = {
         13: KEY.DOWN,
         14: KEY.LEFT,
         15: KEY.RIGHT,
-    }
-};
+    },
+});
 
-// GameCube (Dolphin) — needs analog sticks
-const gcMap = {
-    dpadMode: false,
+// GameCube (Dolphin) — needs analog sticks + analog triggers.
+const gcMap = makeMap({
+    analogAxes: true,
+    analogTriggers: true,
     buttons: {
         0: KEY.A,       // Xbox A → GC A
-        1: KEY.B,       // Xbox B → GC B (also acts as GC B)
+        1: KEY.B,       // Xbox B → GC B
         2: KEY.X,       // Xbox X → GC X
         3: KEY.Y,       // Xbox Y → GC Y
         4: KEY.L,       // Xbox LB → GC L (digital)
         5: KEY.R,       // Xbox RB → GC R (digital)
         6: KEY.L2,      // Xbox LT → GC L (analog)
         7: KEY.R2,      // Xbox RT → GC R (analog) / GC Z
-        8: KEY.SELECT,  // Xbox Back → (unused on GC, but keep)
+        8: KEY.SELECT,
         9: KEY.START,   // Xbox Menu → GC Start
         10: KEY.L3,
         11: KEY.R3,
@@ -55,69 +64,67 @@ const gcMap = {
         13: KEY.DOWN,
         14: KEY.LEFT,
         15: KEY.RIGHT,
-    }
-};
+    },
+});
 
-// N64 (mupen64plus) — needs analog stick, C-buttons on right stick
-const n64Map = {
-    dpadMode: false,
+// N64 — needs analog stick, but triggers are digital Z-button mappings.
+const n64Map = makeMap({
+    analogAxes: true,
+    analogTriggers: false,
     buttons: {
-        0: KEY.A,       // Xbox A → N64 A
-        1: KEY.B,       // Xbox B → N64 B
-        2: KEY.X,       // Xbox X → (C-left via button)
-        3: KEY.Y,       // Xbox Y → (C-up via button)
-        4: KEY.L,       // Xbox LB → N64 L
-        5: KEY.R,       // Xbox RB → N64 R
-        6: KEY.L2,      // Xbox LT → N64 Z
-        7: KEY.R2,      // Xbox RT → N64 Z (alt)
+        0: KEY.A,
+        1: KEY.B,
+        2: KEY.X,
+        3: KEY.Y,
+        4: KEY.L,
+        5: KEY.R,
+        6: KEY.L2,
+        7: KEY.R2,
         8: KEY.SELECT,
-        9: KEY.START,   // Xbox Menu → N64 Start
+        9: KEY.START,
         10: KEY.L3,
         11: KEY.R3,
         12: KEY.UP,
         13: KEY.DOWN,
         14: KEY.LEFT,
         15: KEY.RIGHT,
-    }
-};
+    },
+});
 
-// SNES — d-pad only, no analog needed
-const snesMap = {
-    dpadMode: true,
+// SNES — d-pad only.
+const snesMap = makeMap({
     buttons: {
-        0: KEY.B,       // Xbox A → SNES B (confirm)
-        1: KEY.A,       // Xbox B → SNES A (cancel) — swapped for Nintendo layout feel
-        2: KEY.Y,       // Xbox X → SNES Y
-        3: KEY.X,       // Xbox Y → SNES X
-        4: KEY.L,       // Xbox LB → SNES L
-        5: KEY.R,       // Xbox RB → SNES R
+        0: KEY.B,
+        1: KEY.A,
+        2: KEY.Y,
+        3: KEY.X,
+        4: KEY.L,
+        5: KEY.R,
         8: KEY.SELECT,
         9: KEY.START,
         12: KEY.UP,
         13: KEY.DOWN,
         14: KEY.LEFT,
         15: KEY.RIGHT,
-    }
-};
+    },
+});
 
-// NES — d-pad only, simple 2-button
-const nesMap = {
-    dpadMode: true,
+// NES — d-pad only, simple 2-button.
+const nesMap = makeMap({
     buttons: {
-        0: KEY.A,       // Xbox A → NES A
-        1: KEY.B,       // Xbox B → NES B
+        0: KEY.A,
+        1: KEY.B,
         8: KEY.SELECT,
         9: KEY.START,
         12: KEY.UP,
         13: KEY.DOWN,
         14: KEY.LEFT,
         15: KEY.RIGHT,
-    }
-};
+    },
+});
 
-// GBA — d-pad, L/R shoulders
-const gbaMap = {
-    dpadMode: true,
+// GBA — d-pad, L/R shoulders.
+const gbaMap = makeMap({
     buttons: {
         0: KEY.A,
         1: KEY.B,
@@ -129,21 +136,25 @@ const gbaMap = {
         13: KEY.DOWN,
         14: KEY.LEFT,
         15: KEY.RIGHT,
-    }
-};
+    },
+});
 
-// PSX — needs analog sticks
-const psxMap = {
-    dpadMode: false,
+// PSX / PS2 — DualShock-style analog sticks + analog trigger values.
+const psxMap = makeMap({
+    analogAxes: true,
+    analogTriggers: true,
     buttons: {
-        0: KEY.A,       // Xbox A → PSX Cross
-        1: KEY.B,       // Xbox B → PSX Circle
-        2: KEY.Y,       // Xbox X → PSX Square
-        3: KEY.X,       // Xbox Y → PSX Triangle
-        4: KEY.L,       // Xbox LB → PSX L1
-        5: KEY.R,       // Xbox RB → PSX R1
-        6: KEY.L2,      // Xbox LT → PSX L2
-        7: KEY.R2,      // Xbox RT → PSX R2
+        // Libretro Retropad uses SNES-style semantic face buttons:
+        // bottom=B, right=A, left=Y, top=X.
+        // For PlayStation this means Cross->B, Circle->A, Square->Y, Triangle->X.
+        0: KEY.B,
+        1: KEY.A,
+        2: KEY.Y,
+        3: KEY.X,
+        4: KEY.L,
+        5: KEY.R,
+        6: KEY.L2,
+        7: KEY.R2,
         8: KEY.SELECT,
         9: KEY.START,
         10: KEY.L3,
@@ -152,32 +163,41 @@ const psxMap = {
         13: KEY.DOWN,
         14: KEY.LEFT,
         15: KEY.RIGHT,
-    }
-};
+    },
+});
+
+// Dreamcast — analog sticks + analog triggers.
+const dcMap = makeMap({
+    analogAxes: true,
+    analogTriggers: true,
+    buttons: {...psxMap.buttons},
+});
 
 // System name → map. Names match the `system` field from the game list.
 const systemMaps = {
-    'GC':   gcMap,
-    'gc':   gcMap,
-    'Wii':  gcMap,     // Wii uses GC-compatible controls for now
-    'N64':  n64Map,
-    'n64':  n64Map,
+    'GC': gcMap,
+    'gc': gcMap,
+    'Wii': gcMap,
+    'N64': n64Map,
+    'n64': n64Map,
     'SNES': snesMap,
     'snes': snesMap,
-    'NES':  nesMap,
-    'nes':  nesMap,
-    'GBA':  gbaMap,
-    'gba':  gbaMap,
-    'PSX':  psxMap,
-    'psx':  psxMap,
+    'NES': nesMap,
+    'nes': nesMap,
+    'GBA': gbaMap,
+    'gba': gbaMap,
+    'PSX': psxMap,
+    'psx': psxMap,
+    'PS2': psxMap,
+    'ps2': psxMap,
+    'DC': dcMap,
+    'dc': dcMap,
     'MAME': defaultMap,
     'mame': defaultMap,
-    'DOS':  defaultMap,
-    'dos':  defaultMap,
+    'DOS': defaultMap,
+    'dos': defaultMap,
 };
 
-export const getControllerMap = (system) => {
-    return systemMaps[system] || defaultMap;
-};
+export const getControllerMap = (system) => systemMaps[system] || defaultMap;
 
 export const controllerMaps = {defaultMap, systemMaps, getControllerMap};

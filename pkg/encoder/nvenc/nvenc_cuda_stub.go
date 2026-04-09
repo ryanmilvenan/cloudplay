@@ -9,7 +9,7 @@ import "fmt"
 type ExtMemHandle struct{}
 
 // ImportExternalMemory is a stub on non-Linux or non-NVENC builds.
-func ImportExternalMemory(_ int, _ uint64) (uintptr, *ExtMemHandle, error) {
+func ImportExternalMemory(_ *NVENC, _ int, _ uint64) (uintptr, *ExtMemHandle, error) {
 	return 0, nil, fmt.Errorf("nvenc: ImportExternalMemory requires -tags 'nvenc linux'")
 }
 

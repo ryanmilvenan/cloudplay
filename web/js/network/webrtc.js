@@ -21,6 +21,7 @@ let connected = false;
 let inputReady = false;
 
 let onData;
+let disconnectTimer = null;
 
 const start = (iceservers) => {
     log.info('[rtc] <- ICE servers', iceservers);
@@ -65,6 +66,10 @@ const start = (iceservers) => {
 };
 
 const stop = () => {
+    if (disconnectTimer) {
+        clearTimeout(disconnectTimer);
+        disconnectTimer = null;
+    }
     if (mediaStream) {
         mediaStream.getTracks().forEach(t => {
             t.stop();
@@ -94,7 +99,15 @@ const stop = () => {
 
 const ice = (() => {
     const ICE_TIMEOUT = 2000;
+    const DISCONNECT_GRACE_MS = 8000;
     let timeForIceGathering;
+
+    const clearDisconnectTimer = () => {
+        if (disconnectTimer) {
+            clearTimeout(disconnectTimer);
+            disconnectTimer = null;
+        }
+    };
 
     return {
         onIcecandidate: data => {
@@ -122,17 +135,31 @@ const ice = (() => {
             log.info('[rtc] <- iceConnectionState', connection.iceConnectionState);
             switch (connection.iceConnectionState) {
                 case 'connected':
+                case 'completed':
+                    clearDisconnectTimer();
                     log.info('[rtc] connected...');
                     connected = true;
+                    break;
+                case 'checking':
+                    clearDisconnectTimer();
                     break;
                 case 'disconnected':
                     log.info(`[rtc] disconnected... ` +
                         `connection: ${connection.connectionState}, ice: ${connection.iceConnectionState}, ` +
                         `gathering: ${connection.iceGatheringState}, signalling: ${connection.signalingState}`)
-                    connected = false;
-                    pub(WEBRTC_CONNECTION_CLOSED);
+                    clearDisconnectTimer();
+                    disconnectTimer = setTimeout(() => {
+                        if (!connection || connection.iceConnectionState !== 'disconnected') {
+                            return;
+                        }
+                        log.warn(`[rtc] disconnected persisted for ${DISCONNECT_GRACE_MS}ms; closing session`);
+                        connected = false;
+                        pub(WEBRTC_CONNECTION_CLOSED);
+                    }, DISCONNECT_GRACE_MS);
                     break;
                 case 'failed':
+                case 'closed':
+                    clearDisconnectTimer();
                     log.error('[rtc] failed establish connection, retry...');
                     connected = false;
                     connection.createOffer({iceRestart: true})
@@ -187,7 +214,19 @@ export const webrtc = {
     },
     keyboard: (data) => keyboardChannel?.send(data),
     mouse: (data) => mouseChannel?.send(data),
-    input: (data) => inputReady && dataChannel.send(data),
+    input: (() => {
+        let warnN = 0, sendN = 0;
+        return (data) => {
+            if (!inputReady) {
+                if (++warnN <= 5) console.warn('[webrtc] input dropped: inputReady=false dc=' + !!dataChannel);
+                return;
+            }
+            if (++sendN <= 10 || sendN % 120 === 0) {
+                console.log('[webrtc] input send #' + sendN + ' bytes=' + data.byteLength + ' dcState=' + dataChannel.readyState);
+            }
+            dataChannel.send(data);
+        };
+    })(),
     isConnected: () => connected,
     isInputReady: () => inputReady,
     stats: async () => {

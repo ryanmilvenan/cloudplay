@@ -31,6 +31,9 @@ type VulkanContext struct {
 	cfg      Config
 	ctx      *Context
 	provider *Provider
+	// surface is the headless VkSurfaceKHR created for the negotiation path.
+	// Nil when using the non-negotiated device path (no surface needed there).
+	surface *HeadlessSurface
 }
 
 // NewVulkanContext creates a headless Vulkan context and provider.
@@ -62,6 +65,10 @@ type NegotiationResult struct {
 	Device      unsafe.Pointer // VkDevice
 	Queue       unsafe.Pointer // VkQueue
 	QueueFamily uint32
+	// Surface is the headless VkSurfaceKHR we created and passed to the core
+	// during negotiation so it can create a swapchain.  We retain ownership;
+	// the VulkanContext will destroy it in Deinit().
+	Surface *HeadlessSurface
 	// ExternalMemoryReady indicates whether the negotiated VkDevice was
 	// created with VK_KHR_external_memory + VK_KHR_external_memory_fd
 	// (injected by our create_device_wrapper).  When true, zero-copy Phase 3
@@ -102,6 +109,7 @@ func NewVulkanContextFromNegotiation(cfg Config, r NegotiationResult) (*VulkanCo
 		cfg:      cfg,
 		ctx:      ctx,
 		provider: prov,
+		surface:  r.Surface, // retain for cleanup in Deinit()
 	}, nil
 }
 
@@ -123,13 +131,13 @@ func (v *VulkanContext) ReadFramebuffer(size, w, h uint) []byte {
 	return pixels
 }
 
-// ZeroCopyFd returns the Linux fd for the exportable Vulkan device memory
-// after a ZeroCopy blit has been performed (i.e. after ReadFramebuffer or
-// ReadFrameZeroCopy has been called this frame).
+// ZeroCopyFd returns the Linux fd plus allocation size for the exportable
+// Vulkan device memory after a ZeroCopy blit has been performed (i.e. after
+// ReadFramebuffer or ReadFrameZeroCopy has been called this frame).
 //
 // Returns (-1, err) when Phase 3 is unavailable or no blit has happened yet.
 // The CUDA layer uses this fd to import the memory without CPU involvement.
-func (v *VulkanContext) ZeroCopyFd(w, h uint) (int, error) {
+func (v *VulkanContext) ZeroCopyFd(w, h uint) (int, uint64, error) {
 	return v.provider.ReadFrameZeroCopy(uint32(w), uint32(h))
 }
 
@@ -137,6 +145,12 @@ func (v *VulkanContext) ZeroCopyFd(w, h uint) (int, error) {
 // on this device (VK_KHR_external_memory_fd present and ZeroCopyBuffer allocated).
 func (v *VulkanContext) IsZeroCopyAvailable() bool {
 	return v.ctx.ExternalMemoryEnabled
+}
+
+// WaitZeroCopyBlit waits for the most recent async BlitFrom to complete.
+// Returns nil immediately if no blit is pending.
+func (v *VulkanContext) WaitZeroCopyBlit() error {
+	return v.provider.WaitZeroCopyBlit()
 }
 
 // RenderInterface returns the libretro Vulkan render interface pointer that
@@ -148,9 +162,31 @@ func (v *VulkanContext) RenderInterface() unsafe.Pointer {
 	return unsafe.Pointer(v.provider.Interface())
 }
 
+// DestroyProvider unregisters the provider's cgo.Handle and releases its
+// GPU resources (ZeroCopyBuffer, FrameCapture) WITHOUT destroying the
+// underlying VkDevice.  Call this before context_destroy so that any
+// libretro callbacks that fire during context_destroy (e.g. go_set_image)
+// get a safe nil lookup instead of accessing freed memory.
+func (v *VulkanContext) DestroyProvider() {
+	if v.provider != nil {
+		v.provider.Destroy()
+	}
+}
+
 // Deinit destroys all Vulkan resources.
+// DestroyProvider should be called before Deinit if context_destroy needs
+// to be invoked in between (see deinitVulkanVideo in nanoarch_vulkan.go).
 func (v *VulkanContext) Deinit() error {
+	// Provider may already be destroyed by DestroyProvider; Destroy is safe
+	// to call again because unregisterProvider guards with a handle==0 check
+	// and the GPU resources are only freed once.
 	v.provider.Destroy()
+	// Destroy the headless surface before the instance it was created from.
+	// surface.Destroy is nil-safe and instance-safe when surface is nil.
+	if v.surface != nil {
+		v.surface.Destroy(unsafe.Pointer(v.ctx.Instance))
+		v.surface = nil
+	}
 	v.ctx.Destroy()
 	return nil
 }

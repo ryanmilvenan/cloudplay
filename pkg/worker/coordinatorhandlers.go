@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/base64"
+	"log"
 
 	"github.com/giongto35/cloud-game/v3/pkg/api"
 	"github.com/giongto35/cloud-game/v3/pkg/com"
@@ -207,15 +208,28 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 		// Phase 3c: GPU RGBA→NV12 colour conversion is now implemented via
 		// embedded PTX kernels (BT.601, JIT-compiled).  Falls back to raw
 		// copy if PTX JIT fails (stream stays up, colours may be wrong).
-		if w.conf.Encoder.Video.ZeroCopy && app.IsZeroCopyAvailable() {
+		backend := app.VideoBackend()
+		zcConfigEnabled := w.conf.Encoder.Video.ZeroCopy
+		zcAvailable := backend != nil && backend.SupportsZeroCopy()
+		backendName := "<nil>"
+		backendKind := "<nil>"
+		if backend != nil {
+			backendName = backend.Name()
+			backendKind = string(backend.Kind())
+		}
+		log.Printf("[cloudplay diag] zero-copy arming check: config.ZeroCopy=%v backend=%s kind=%s SupportsZeroCopy=%v codec=%s",
+			zcConfigEnabled, backendName, backendKind, zcAvailable, w.conf.Encoder.Video.Codec)
+		if zcConfigEnabled && zcAvailable {
 			vw, vh := uint(m.VideoW), uint(m.VideoH)
-			media.TryArmZeroCopy(
+			armed := media.TryArmZeroCopy(
 				m,
 				w.conf.Encoder.Video,
 				vw, vh,
-				func(fw, fh uint) (int, error) { return app.ZeroCopyFd(fw, fh) },
+				func(fw, fh uint) (int, uint64, error) { return backend.ZeroCopyFd(fw, fh) },
+				func() error { return backend.WaitFrameReady() },
 				w.log,
 			)
+			log.Printf("[cloudplay diag] zero-copy TryArmZeroCopy returned: armed=%v (dims=%dx%d backend=%s)", armed, vw, vh, backendName)
 		}
 
 		r.StartApp()
@@ -258,10 +272,12 @@ func (c *coordinator) HandleTerminateSession(rq api.TerminateSessionRequest, w *
 
 // HandleQuitGame handles cases when a user manually exits the game.
 func (c *coordinator) HandleQuitGame(rq api.GameQuitRequest, w *Worker) {
-	if user := w.router.FindUser(rq.Id); user != nil {
-		w.router.Remove(user)
-		c.log.Debug().Msgf(">>> users: %v", w.router.Users())
+	r := w.router.Room()
+	if r == nil || rq.Rid == "" || rq.Rid != r.Id() {
+		return
 	}
+	w.router.Reset()
+	c.log.Debug().Msg("shared room killed")
 }
 
 func (c *coordinator) HandleResetGame(rq api.ResetGameRequest, w *Worker) api.Out {

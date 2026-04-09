@@ -6,7 +6,7 @@ import {
 // UI
 const page = document.getElementsByTagName('html')[0];
 const gameBoy = document.getElementById('gamebody');
-const sourceLink = document.getElementsByClassName('source')[0] || { style: {} };
+const sourceLink = document.getElementsByClassName('source')[0] || null;
 
 export const browser = {unknown: 0, firefox: 1, chrome: 2, edge: 3, safari: 4}
 export const platform = {unknown: 0, windows: 1, linux: 2, macos: 3, android: 4,}
@@ -25,16 +25,18 @@ const fixScreenLayout = () => {
 
     rescaleGameBoy(targetWidth, targetHeight);
 
-    sourceLink.style['bottom'] = isLayoutSwitched ? 0 : '';
-    if (isLayoutSwitched) {
-        sourceLink.style.removeProperty('right');
-        sourceLink.style['left'] = 5;
-    } else {
-        sourceLink.style.removeProperty('left');
-        sourceLink.style['right'] = 5;
+    if (sourceLink && sourceLink.style) {
+        sourceLink.style['bottom'] = isLayoutSwitched ? 0 : '';
+        if (isLayoutSwitched) {
+            sourceLink.style.removeProperty('right');
+            sourceLink.style['left'] = 5;
+        } else {
+            sourceLink.style.removeProperty('left');
+            sourceLink.style['right'] = 5;
+        }
+        sourceLink.style['transform'] = isLayoutSwitched ? 'rotate(-90deg)' : '';
+        sourceLink.style['transform-origin'] = isLayoutSwitched ? 'left top' : '';
     }
-    sourceLink.style['transform'] = isLayoutSwitched ? 'rotate(-90deg)' : '';
-    sourceLink.style['transform-origin'] = isLayoutSwitched ? 'left top' : '';
 };
 
 const rescaleGameBoy = (targetWidth, targetHeight) => {

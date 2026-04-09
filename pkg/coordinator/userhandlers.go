@@ -8,7 +8,25 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/config"
 )
 
-func (u *User) HandleWebrtcInit() {
+func (u *User) ensureWorker(info HasServerInfo) bool {
+	if u.w != nil {
+		return true
+	}
+	w := info.PickAvailableWorker()
+	if w == nil {
+		u.Notify(api.ErrNoFreeSlots, "")
+		u.log.Warn().Msg("no available worker to rebind user")
+		return false
+	}
+	u.w = w
+	u.log.Info().Str("wid", w.Id().String()).Msg("rebound user to available worker")
+	return true
+}
+
+func (u *User) HandleWebrtcInit(info HasServerInfo) {
+	if !u.ensureWorker(info) {
+		return
+	}
 	uid := u.Id().String()
 	resp, err := u.w.WebrtcInit(uid)
 	if err != nil || resp == nil || *resp == api.EMPTY {
@@ -26,7 +44,10 @@ func (u *User) HandleWebrtcIceCandidate(rq api.WebrtcUserIceCandidate) {
 	u.w.WebrtcIceCandidate(u.Id().String(), string(rq))
 }
 
-func (u *User) HandleStartGame(rq api.GameStartUserRequest, conf config.CoordinatorConfig) {
+func (u *User) HandleStartGame(rq api.GameStartUserRequest, conf config.CoordinatorConfig, info HasServerInfo) {
+	if !u.ensureWorker(info) {
+		return
+	}
 	// Worker slot / room gating:
 	// - If the worker is BUSY (no free slot), we must not create another room.
 	//   * If the worker has already reported a room id, only allow requests

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	stlos "os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -150,7 +151,7 @@ type Nanoarch struct {
 	vulkan                   vulkanState
 	vfr                      bool
 	Aspect                   bool
-	sdlCtx                   *graphics.SDL
+	glCtx                    graphics.HeadlessGLContext
 	hackSkipHwContextDestroy bool
 	hackSkipSameThreadSave   bool
 	limiter                  func(func())
@@ -240,6 +241,39 @@ func (n *Nanoarch) Close()                           { n.Stopped.Store(true); n.
 func (n *Nanoarch) SetLogger(log *logger.Logger)     { n.log = log }
 func (n *Nanoarch) SetVideoDebounce(t time.Duration) { n.limiter = NewLimit(t) }
 func (n *Nanoarch) SaveDir() string                  { return C.GoString(n.cSaveDirectory) }
+
+// needsJoypadWorkaround returns true for cores whose
+// retro_set_controller_port_device is broken for RETRO_DEVICE_ANALOG.
+// These cores get RETRO_DEVICE_JOYPAD (1) instead of the system-wide
+// RETRO_DEVICE_ANALOG (5) default.
+//
+// PCSX2: its switch only handles RETRO_DEVICE_JOYPAD → DualShock2.
+//        RETRO_DEVICE_ANALOG hits the default case → pad type "None",
+//        silently disabling all input.
+func needsJoypadWorkaround() bool {
+	lib := strings.ToLower(Nan0.meta.LibPath)
+	return strings.Contains(lib, "pcsx2")
+}
+
+// flipFrameVertical returns a vertically flipped copy of the raw frame.
+// OpenGL readback uses a bottom-left origin, while the rest of CloudPlay
+// expects top-left. Apply this to GL-fallback cores (Flycast, PCSX2).
+func flipFrameVertical(src []byte, width, height, bpp int) []byte {
+	if len(src) == 0 || width <= 0 || height <= 0 || bpp <= 0 {
+		return src
+	}
+	row := width * bpp
+	if row <= 0 || len(src) < row*height {
+		return src
+	}
+	out := make([]byte, row*height)
+	for y := 0; y < height; y++ {
+		srcOff := y * row
+		dstOff := (height - 1 - y) * row
+		copy(out[dstOff:dstOff+row], src[srcOff:srcOff+row])
+	}
+	return out
+}
 func (n *Nanoarch) SetSaveDirSuffix(sx string) {
 	dir := C.GoString(n.cSaveDirectory) + "/" + sx
 	err := os.CheckCreateDir(dir)
@@ -400,9 +434,11 @@ func (n *Nanoarch) LoadGame(path string) error {
 		}
 	}
 
+	fmt.Fprintf(stlos.Stderr, "[DIAG LoadGame] checkpoint: before bridge_retro_load_game\n")
 	if ok := C.bridge_retro_load_game(retroLoadGame, &game); !ok {
 		return fmt.Errorf("core failed to load ROM: %v", path)
 	}
+	fmt.Fprintf(stlos.Stderr, "[DIAG LoadGame] checkpoint: after bridge_retro_load_game OK\n")
 
 	var av C.struct_retro_system_av_info
 	C.bridge_retro_get_system_av_info(retroGetSystemAVInfo, &av)
@@ -410,6 +446,11 @@ func (n *Nanoarch) LoadGame(path string) error {
 		av.geometry.base_width, av.geometry.base_height,
 		av.geometry.max_width, av.geometry.max_height,
 		av.timing.fps, av.geometry.aspect_ratio, av.timing.sample_rate,
+	)
+	n.log.Info().Msgf("[cloudplay diag] AV info initial base=%dx%d max=%dx%d fps=%.3f ar=%.3f sampleRate=%.1f",
+		int(av.geometry.base_width), int(av.geometry.base_height),
+		int(av.geometry.max_width), int(av.geometry.max_height),
+		float64(av.timing.fps), float64(av.geometry.aspect_ratio), float64(av.timing.sample_rate),
 	)
 	if isGeometryDifferent(av.geometry) {
 		geometryChange(av.geometry)
@@ -426,6 +467,15 @@ func (n *Nanoarch) LoadGame(path string) error {
 
 	n.Stopped.Store(false)
 
+	if n.Video.gl.enabled && !n.vulkan.enabled && n.Video.hw == nil {
+		n.log.Warn().Msg("GL-capable core did not provide SET_HW_RENDER; falling back to software/non-HW video path")
+		fmt.Fprintf(stlos.Stderr, "[DIAG LoadGame] no HW render callback; disabling GL path fallback to software\n")
+		n.Video.gl.enabled = false
+		n.Video.gl.autoCtx = false
+		thread.SwitchGraphics(false)
+	}
+
+	fmt.Fprintf(stlos.Stderr, "[DIAG LoadGame] checkpoint: before video init vulkan=%v gl=%v libco=%v\n", n.vulkan.enabled, n.Video.gl.enabled, n.LibCo)
 	if n.vulkan.enabled {
 		// Vulkan init: headless — no SDL, no thread pinning required.
 		// initVulkanVideo creates the context and fires context_reset.
@@ -436,8 +486,11 @@ func (n *Nanoarch) LoadGame(path string) error {
 		}
 	} else if n.Video.gl.enabled {
 		if n.LibCo {
+			fmt.Fprintf(stlos.Stderr, "[DIAG LoadGame] checkpoint: before same_thread(init_video_cgo) [LibCo GL]\n")
 			C.same_thread(C.init_video_cgo)
+			fmt.Fprintf(stlos.Stderr, "[DIAG LoadGame] checkpoint: after same_thread(init_video_cgo), before context_reset [LibCo GL]\n")
 			C.same_thread(unsafe.Pointer(Nan0.Video.hw.context_reset))
+			fmt.Fprintf(stlos.Stderr, "[DIAG LoadGame] checkpoint: after context_reset [LibCo GL]\n")
 		} else {
 			runtime.LockOSThread()
 			initVideo()
@@ -445,11 +498,19 @@ func (n *Nanoarch) LoadGame(path string) error {
 			runtime.UnlockOSThread()
 		}
 	}
+	fmt.Fprintf(stlos.Stderr, "[DIAG LoadGame] checkpoint: after video init\n")
 
-	// set default controller types on all ports
-	// needed for nestopia
+	// Default: RETRO_DEVICE_ANALOG on all ports.
+	// This exposes dual analog sticks + analog triggers to every core.
+	// Cores whose retro_set_controller_port_device is broken for ANALOG
+	// (e.g. PCSX2 maps it to pad type "None") get JOYPAD as a workaround.
+	defaultDevice := C.unsigned(C.RETRO_DEVICE_ANALOG)
+	if needsJoypadWorkaround() {
+		defaultDevice = C.unsigned(C.RETRO_DEVICE_JOYPAD)
+		n.log.Warn().Msgf("controller device: JOYPAD workaround for core %s (ANALOG broken)", n.meta.LibPath)
+	}
 	for i := range maxPort {
-		C.bridge_retro_set_controller_port_device(retroSetControllerPortDevice, C.uint(i), C.RETRO_DEVICE_JOYPAD)
+		C.bridge_retro_set_controller_port_device(retroSetControllerPortDevice, C.uint(i), defaultDevice)
 	}
 
 	// map custom devices to ports
@@ -462,6 +523,7 @@ func (n *Nanoarch) LoadGame(path string) error {
 
 	n.LastFrameTime = time.Now().UnixNano()
 
+	fmt.Fprintf(stlos.Stderr, "[DIAG LoadGame] checkpoint: LoadGame returning nil (success)\n")
 	return nil
 }
 
@@ -480,7 +542,7 @@ func (n *Nanoarch) Shutdown() {
 			thread.Main(func() {
 				// running inside a go routine, lock the thread to make sure the OpenGL context stays current
 				runtime.LockOSThread()
-				if err := n.sdlCtx.BindContext(); err != nil {
+				if err := n.glCtx.BindContext(); err != nil {
 					n.log.Error().Err(err).Msg("ctx switch fail")
 				}
 			})
@@ -533,7 +595,7 @@ func (n *Nanoarch) Run() {
 		// thread-bound — no locking needed.
 		if n.Video.gl.enabled && !n.vulkan.enabled {
 			runtime.LockOSThread()
-			if err := n.sdlCtx.BindContext(); err != nil {
+			if err := n.glCtx.BindContext(); err != nil {
 				n.log.Error().Err(err).Msg("ctx bind fail")
 			}
 		}
@@ -729,6 +791,8 @@ func (m Metadata) HasHack(h string) bool {
 	return false
 }
 
+var diagVideoRefreshCount int64
+
 var (
 	retroAPIVersion              unsafe.Pointer
 	retroDeinit                  unsafe.Pointer
@@ -756,17 +820,32 @@ var (
 
 //export coreVideoRefresh
 func coreVideoRefresh(data unsafe.Pointer, width, height uint, packed uint) {
+	// When Stopped, Vulkan cores (LRPS2) still need their frame cycle to
+	// complete so retro_run yields back.  Accept the frame through the
+	// Vulkan readback path (which triggers go_set_image / lock / unlock
+	// callbacks) but skip the output to the media pipeline.
 	if Nan0.Stopped.Load() {
+		if Nan0.vulkan.enabled && data == C.RETRO_HW_FRAME_BUFFER_VALID {
+			readVulkanFramebuffer(0, width, height)
+		}
 		return
 	}
 
-	// some frames can be rendered slower or faster than internal 1/fps core tick
-	// so track actual frame render time for proper RTP packet timestamps
-	// (and proper frame display time, for example: 1->1/60=16.6ms, 2->10ms, 3->23ms, 4->16.6ms)
-	// this is useful only for cores with variable framerate, for the fixed framerate cores this adds stutter
-	// !to find docs on Libretro refresh sync and frame times
+	// DIAG: unconditional frame counter to verify coreVideoRefresh is called
+	diagN := atomic.AddInt64(&diagVideoRefreshCount, 1)
+	if diagN <= 12 || diagN%120 == 0 {
+		fmt.Fprintf(stlos.Stderr, "[DIAG coreVideoRefresh] ts=%d frame=%d w=%d h=%d packed=%d bpp=%d data_nil=%v vulkan=%v hw_valid=%v\n",
+			time.Now().UnixNano(), diagN, width, height, packed, Nan0.Video.PixFmt.BPP, data == nil, Nan0.vulkan.enabled, data == C.RETRO_HW_FRAME_BUFFER_VALID)
+	}
+
+	// Some cores can render slower or faster than the internal 1/fps core tick,
+	// so historically we tracked actual render time for RTP timestamps.
+	//
+	// For the current Vulkan/GameCube path this makes cadence visibly worse: the
+	// stream becomes hitchy because the sender duration follows wall-clock jitter
+	// instead of a predictable display cadence. Prioritize stable pacing here.
 	dt := Nan0.tickTime
-	if Nan0.vfr {
+	if Nan0.vfr && !Nan0.vulkan.enabled {
 		t := time.Now().UnixNano()
 		dt = t - Nan0.LastFrameTime
 		Nan0.LastFrameTime = t
@@ -791,17 +870,47 @@ func coreVideoRefresh(data unsafe.Pointer, width, height uint, packed uint) {
 	if data != C.RETRO_HW_FRAME_BUFFER_VALID {
 		//noinspection GoRedundantConversion
 		data_ = unsafe.Slice((*byte)(data), bytes)
+		// DIAG: check if data pointer actually has non-zero content
+		if diagN <= 3 {
+			nonZero := 0
+			for i := 0; i < len(data_) && i < 2000; i++ {
+				if data_[i] != 0 { nonZero++; if nonZero > 5 { break } }
+			}
+			fmt.Fprintf(stlos.Stderr, "[DIAG coreVideoRefresh] frame=%d ptr=%p bytes=%d first16=%v nonZeroIn2k=%d\n",
+				diagN, data, bytes, data_[:min(16, len(data_))], nonZero)
+		}
 	} else if Nan0.vulkan.enabled {
 		// Vulkan HW render: read back from Vulkan staging buffer.
 		data_ = readVulkanFramebuffer(bytes, width, height)
 	} else {
-		// GL HW render: read back via glReadPixels into FBO.
+		// GL HW render: capture callback-time framebuffer bindings before the
+		// core or driver resets them, then read back.
+		drawFbo, readFbo := graphics.CaptureHwFramebufferBindings()
+		if diagN <= 12 || diagN%120 == 0 {
+			fmt.Fprintf(stlos.Stderr, "[DIAG coreVideoRefresh GL bindings] frame=%d drawFbo=%d readFbo=%d\n", diagN, drawFbo, readFbo)
+		}
 		data_ = graphics.ReadFramebuffer(bytes, width, height)
+		// OpenGL uses bottom-left origin; flip for GL-fallback cores.
+		if Nan0.Video.hw != nil && bool(Nan0.Video.hw.bottom_left_origin) {
+			data_ = flipFrameVertical(data_, int(width), int(height), int(Nan0.Video.PixFmt.BPP))
+		}
 	}
 
 	// some cores or games have a variable output frame size, i.e. PSX Rearmed
 	// also we have an option of xN output frame magnification
 	// so, it may be rescaled
+	//
+	// Dynamic resolution fix: some cores (notably Angrylion for N64) change
+	// their output resolution mid-game without calling SET_GEOMETRY or
+	// SET_SYSTEM_AV_INFO.  Detect this by comparing the actual frame
+	// dimensions against the current base geometry and synthesize a geometry
+	// change so the downstream encoder reinitialises at the correct size.
+	if C.unsigned(width) != Nan0.sys.av.geometry.base_width || C.unsigned(height) != Nan0.sys.av.geometry.base_height {
+		geom := Nan0.sys.av.geometry
+		geom.base_width = C.unsigned(width)
+		geom.base_height = C.unsigned(height)
+		geometryChange(geom)
+	}
 
 	Nan0.Handlers.OnVideo(data_, int32(dt), FrameInfo{W: width, H: height, Stride: packed})
 }
@@ -835,8 +944,17 @@ func coreLog(level C.enum_retro_log_level, msg *C.char) {
 	}
 }
 
+var fboDiagN int64
+
 //export coreGetCurrentFramebuffer
-func coreGetCurrentFramebuffer() C.uintptr_t { return (C.uintptr_t)(graphics.GlFbo()) }
+func coreGetCurrentFramebuffer() C.uintptr_t {
+	fboId := graphics.GlFbo()
+	n := atomic.AddInt64(&fboDiagN, 1)
+	if n <= 5 || n%600 == 0 {
+		fmt.Fprintf(stlos.Stderr, "[DIAG coreGetCurrentFramebuffer] n=%d fbo=%d\n", n, fboId)
+	}
+	return (C.uintptr_t)(fboId)
+}
 
 //export coreGetProcAddress
 func coreGetProcAddress(sym *C.char) C.retro_proc_address_t {
@@ -994,6 +1112,10 @@ func initVideo() {
 		initVulkanVideo()
 		return
 	}
+	if Nan0.Video.hw == nil {
+		Nan0.log.Warn().Msg("initVideo called without HW render callback; skipping GL context init")
+		return
+	}
 
 	var context graphics.Context
 	switch Nan0.Video.hw.context_type {
@@ -1019,7 +1141,7 @@ func initVideo() {
 
 	thread.Main(func() {
 		var err error
-		Nan0.sdlCtx, err = graphics.NewSDLContext(graphics.Config{
+		Nan0.glCtx, err = graphics.NewHeadlessGLContext(graphics.Config{
 			Ctx:            context,
 			W:              int(Nan0.sys.av.geometry.max_width),
 			H:              int(Nan0.sys.av.geometry.max_height),
@@ -1048,11 +1170,11 @@ func deinitVideo() {
 		return
 	}
 
-	if !Nan0.hackSkipHwContextDestroy {
+	if !Nan0.hackSkipHwContextDestroy && Nan0.Video.hw != nil {
 		C.bridge_context_reset(Nan0.Video.hw.context_destroy)
 	}
 	thread.Main(func() {
-		if err := Nan0.sdlCtx.Deinit(); err != nil {
+		if err := Nan0.glCtx.Deinit(); err != nil {
 			Nan0.log.Error().Err(err).Msg("deinit fail")
 		}
 	})
@@ -1096,6 +1218,11 @@ func geometryChange(geom C.struct_retro_game_geometry) {
 			Nan0.log.Debug().Msgf("OpenGL frame buffer: %v", bufS)
 		}
 
+		Nan0.log.Info().Msgf("[cloudplay diag] geometryChange oldBase=%dx%d oldMax=%dx%d newBase=%dx%d newMax=%dx%d ar=%.3f gl=%v",
+			int(old.base_width), int(old.base_height), int(old.max_width), int(old.max_height),
+			int(geom.base_width), int(geom.base_height), int(geom.max_width), int(geom.max_height),
+			float64(geom.aspect_ratio), Nan0.Video.gl.enabled,
+		)
 		if Nan0.OnSystemAvInfo != nil {
 			Nan0.log.Debug().Msgf(">>> geometry change %v -> %v", old, geom)
 			go Nan0.OnSystemAvInfo()

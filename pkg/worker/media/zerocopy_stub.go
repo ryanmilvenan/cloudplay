@@ -16,7 +16,8 @@ func TryArmZeroCopy(
 	_ *WebrtcMediaPipe,
 	_ config.Video,
 	_, _ uint,
-	_ func(w, h uint) (int, error),
+	_ func(w, h uint) (int, uint64, error),
+	_ func() error,
 	log *logger.Logger,
 ) bool {
 	log.Debug().Msg("media/zerocopy: not available (requires -tags 'nvenc linux vulkan')")

@@ -68,7 +68,7 @@ sub(KEYBOARD_TOGGLE_FILTER_MODE, data => {
     log.debug(`New keyboard filter mode: ${isKeysFilteredMode}`);
 });
 
-let dpadMode = true;
+let dpadMode = false;
 let dpadState = {[KEY.LEFT]: false, [KEY.RIGHT]: false, [KEY.UP]: false, [KEY.DOWN]: false};
 
 function onDpadToggle(checked) {

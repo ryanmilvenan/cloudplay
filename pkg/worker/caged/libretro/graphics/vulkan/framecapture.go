@@ -190,3 +190,200 @@ func (fc *FrameCapture) Readback(srcImage C.VkImage, currentLayout C.VkImageLayo
 func (fc *FrameCapture) ReadbackDirect(srcImage C.VkImage) ([]byte, error) {
 	return fc.Readback(srcImage, C.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
 }
+
+// ReadbackOwnTestImage creates a temporary VkImage, transitions it, copies
+// to the staging buffer, and destroys it.  Used to test whether vkCmdCopyImageToBuffer
+// works at all from our command pool.
+func (fc *FrameCapture) ReadbackOwnTestImage() ([]byte, error) {
+	// Create a small 64x64 test image
+	imgInfo := C.VkImageCreateInfo{
+		sType:     C.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+		imageType: C.VK_IMAGE_TYPE_2D,
+		format:    C.VK_FORMAT_B8G8R8A8_UNORM,
+		extent:    C.VkExtent3D{width: 64, height: 64, depth: 1},
+		mipLevels: 1, arrayLayers: 1,
+		samples:      C.VK_SAMPLE_COUNT_1_BIT,
+		tiling:       C.VK_IMAGE_TILING_OPTIMAL,
+		usage:        C.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | C.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+		initialLayout: C.VK_IMAGE_LAYOUT_UNDEFINED,
+	}
+	var testImg C.VkImage
+	if res := C.vkCreateImage(fc.ctx.Device, &imgInfo, nil, &testImg); res != C.VK_SUCCESS {
+		return nil, fmt.Errorf("vkCreateImage test: %d", int(res))
+	}
+	defer C.vkDestroyImage(fc.ctx.Device, testImg, nil)
+
+	var reqs C.VkMemoryRequirements
+	C.vkGetImageMemoryRequirements(fc.ctx.Device, testImg, &reqs)
+
+	mem, err := fc.ctx.allocateMemory(reqs, C.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+	if err != nil {
+		return nil, fmt.Errorf("alloc test: %w", err)
+	}
+	defer C.vkFreeMemory(fc.ctx.Device, mem, nil)
+
+	if res := C.vkBindImageMemory(fc.ctx.Device, testImg, mem, 0); res != C.VK_SUCCESS {
+		return nil, fmt.Errorf("bindImage test: %d", int(res))
+	}
+
+	cmd, err := fc.ctx.beginOneShot()
+	if err != nil {
+		return nil, err
+	}
+
+	// Transition test image to TRANSFER_SRC
+	C.transition_image_layout(cmd, testImg,
+		C.VK_IMAGE_LAYOUT_UNDEFINED, C.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		0, C.VK_ACCESS_TRANSFER_READ_BIT,
+		C.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, C.VK_PIPELINE_STAGE_TRANSFER_BIT)
+
+	region := C.VkBufferImageCopy{
+		imageSubresource: C.VkImageSubresourceLayers{
+			aspectMask: C.VK_IMAGE_ASPECT_COLOR_BIT, layerCount: 1,
+		},
+		imageExtent: C.VkExtent3D{width: 64, height: 64, depth: 1},
+	}
+	C.vkCmdCopyImageToBuffer(cmd, testImg, C.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fc.buf, 1, &region)
+
+	if err := fc.ctx.submitOneShot(cmd); err != nil {
+		return nil, err
+	}
+
+	size := 64 * 64 * 4
+	return C.GoBytes(fc.mapped, C.int(size)), nil
+}
+
+// TinyCopy submits a command buffer that copies just 1x1 pixel from the image.
+// Used for diagnostics to isolate whether the problem is image dimensions.
+func (fc *FrameCapture) TinyCopy(srcImage C.VkImage) error {
+	cmd, err := fc.ctx.beginOneShot()
+	if err != nil {
+		return err
+	}
+
+	C.transition_image_layout(cmd, srcImage,
+		C.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, C.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		C.VK_ACCESS_SHADER_READ_BIT, C.VK_ACCESS_TRANSFER_READ_BIT,
+		C.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, C.VK_PIPELINE_STAGE_TRANSFER_BIT)
+
+	region := C.VkBufferImageCopy{
+		imageSubresource: C.VkImageSubresourceLayers{
+			aspectMask: C.VK_IMAGE_ASPECT_COLOR_BIT, layerCount: 1,
+		},
+		imageExtent: C.VkExtent3D{width: 1, height: 1, depth: 1},
+	}
+	C.vkCmdCopyImageToBuffer(cmd, srcImage, C.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fc.buf, 1, &region)
+
+	C.transition_image_layout(cmd, srcImage,
+		C.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, C.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		C.VK_ACCESS_TRANSFER_READ_BIT, C.VK_ACCESS_SHADER_READ_BIT,
+		C.VK_PIPELINE_STAGE_TRANSFER_BIT, C.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)
+
+	return fc.ctx.submitOneShot(cmd)
+}
+
+// TinyCopySize copies w×h pixels from the image. Used for diagnostic probing.
+func (fc *FrameCapture) TinyCopySize(srcImage C.VkImage, w, h uint32) error {
+	cmd, err := fc.ctx.beginOneShot()
+	if err != nil {
+		return err
+	}
+
+	C.transition_image_layout(cmd, srcImage,
+		C.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, C.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		C.VK_ACCESS_SHADER_READ_BIT, C.VK_ACCESS_TRANSFER_READ_BIT,
+		C.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, C.VK_PIPELINE_STAGE_TRANSFER_BIT)
+
+	region := C.VkBufferImageCopy{
+		imageSubresource: C.VkImageSubresourceLayers{
+			aspectMask: C.VK_IMAGE_ASPECT_COLOR_BIT, layerCount: 1,
+		},
+		imageExtent: C.VkExtent3D{width: C.uint32_t(w), height: C.uint32_t(h), depth: 1},
+	}
+	C.vkCmdCopyImageToBuffer(cmd, srcImage, C.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fc.buf, 1, &region)
+
+	C.transition_image_layout(cmd, srcImage,
+		C.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, C.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		C.VK_ACCESS_TRANSFER_READ_BIT, C.VK_ACCESS_SHADER_READ_BIT,
+		C.VK_PIPELINE_STAGE_TRANSFER_BIT, C.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)
+
+	return fc.ctx.submitOneShot(cmd)
+}
+
+// BarrierOnly submits a command buffer that contains just a pipeline barrier
+// referencing the image (same layout → same layout, no actual work).
+// Used for diagnostics: if this causes DEVICE_LOST, the issue is with
+// referencing the image from our command buffer at all.
+// cmd must be from beginOneShot (already begun).
+func (fc *FrameCapture) BarrierOnly(cmd C.VkCommandBuffer, srcImage C.VkImage) error {
+	C.transition_image_layout(
+		cmd, srcImage,
+		C.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		C.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		C.VK_ACCESS_SHADER_READ_BIT,
+		C.VK_ACCESS_SHADER_READ_BIT,
+		C.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+		C.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+	)
+	return fc.ctx.submitOneShot(cmd)
+}
+
+// ReadbackGeneral copies using VK_IMAGE_LAYOUT_GENERAL for the source image.
+// This is a workaround for cores like Dolphin where transitioning the image
+// layout from SHADER_READ_ONLY causes DEVICE_LOST.  GENERAL layout is
+// compatible with both shader reads and transfers per the Vulkan spec.
+func (fc *FrameCapture) ReadbackGeneral(srcImage C.VkImage) ([]byte, error) {
+	cmd, err := fc.ctx.beginOneShot()
+	if err != nil {
+		return nil, err
+	}
+
+	// Transition to GENERAL (compatible with both read and transfer)
+	C.transition_image_layout(
+		cmd, srcImage,
+		C.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		C.VK_IMAGE_LAYOUT_GENERAL,
+		C.VK_ACCESS_SHADER_READ_BIT,
+		C.VK_ACCESS_TRANSFER_READ_BIT,
+		C.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+		C.VK_PIPELINE_STAGE_TRANSFER_BIT,
+	)
+
+	// Copy using GENERAL layout
+	region := C.VkBufferImageCopy{
+		bufferOffset:      0,
+		bufferRowLength:   0,
+		bufferImageHeight: 0,
+		imageSubresource: C.VkImageSubresourceLayers{
+			aspectMask:     C.VK_IMAGE_ASPECT_COLOR_BIT,
+			mipLevel:       0,
+			baseArrayLayer: 0,
+			layerCount:     1,
+		},
+		imageOffset: C.VkOffset3D{x: 0, y: 0, z: 0},
+		imageExtent: C.VkExtent3D{
+			width:  C.uint32_t(fc.width),
+			height: C.uint32_t(fc.height),
+			depth:  1,
+		},
+	}
+	C.vkCmdCopyImageToBuffer(cmd, srcImage, C.VK_IMAGE_LAYOUT_GENERAL, fc.buf, 1, &region)
+
+	// Transition back
+	C.transition_image_layout(
+		cmd, srcImage,
+		C.VK_IMAGE_LAYOUT_GENERAL,
+		C.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		C.VK_ACCESS_TRANSFER_READ_BIT,
+		C.VK_ACCESS_SHADER_READ_BIT,
+		C.VK_PIPELINE_STAGE_TRANSFER_BIT,
+		C.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+	)
+
+	if err := fc.ctx.submitOneShot(cmd); err != nil {
+		return nil, err
+	}
+
+	size := int(fc.size)
+	return (*[1 << 30]byte)(fc.mapped)[:size:size], nil
+}

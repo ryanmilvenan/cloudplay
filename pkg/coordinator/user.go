@@ -15,6 +15,7 @@ type User struct {
 
 type HasServerInfo interface {
 	GetServerList() []api.Server
+	PickAvailableWorker() *Worker
 }
 
 func NewUser(sock *com.Connection, log *logger.Logger) *User {
@@ -47,15 +48,13 @@ func (u *User) HandleRequests(info HasServerInfo, conf config.CoordinatorConfig)
 	return u.ProcessPackets(func(x api.In[com.Uid]) (err error) {
 		switch x.T {
 		case api.WebrtcInit:
-			if u.w != nil {
-				u.HandleWebrtcInit()
-			}
+			u.HandleWebrtcInit(info)
 		case api.WebrtcAnswer:
 			err = api.Do(x, u.HandleWebrtcAnswer)
 		case api.WebrtcIce:
 			err = api.Do(x, u.HandleWebrtcIceCandidate)
 		case api.StartGame:
-			err = api.Do(x, func(d api.GameStartUserRequest) { u.HandleStartGame(d, conf) })
+			err = api.Do(x, func(d api.GameStartUserRequest) { u.HandleStartGame(d, conf, info) })
 		case api.QuitGame:
 			err = api.Do(x, u.HandleQuitGame)
 		case api.SaveGame:

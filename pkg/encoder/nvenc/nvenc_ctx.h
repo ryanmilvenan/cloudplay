@@ -7,6 +7,7 @@
 #pragma once
 
 #include <libavcodec/avcodec.h>
+#include <cuda.h>
 
 // nvenc_ctx holds all FFmpeg state for one h264_nvenc encoding session.
 typedef struct {
@@ -14,6 +15,7 @@ typedef struct {
     AVFrame        *frame;
     AVPacket       *packet;
     AVBufferRef    *hw_device_ctx;
+    CUcontext       cu_ctx;
     int             width;
     int             height;
     int             y_size;   // luma plane size (w*h)

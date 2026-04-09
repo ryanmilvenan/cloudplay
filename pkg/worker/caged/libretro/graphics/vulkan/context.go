@@ -14,6 +14,115 @@ static uint32_t cloudplay_vk_make_version(uint32_t major, uint32_t minor, uint32
     return VK_MAKE_VERSION(major, minor, patch);
 }
 
+// Submit a one-shot command buffer, wait for completion, then free.
+// Done in C to avoid Go CGo pointer rules (VkSubmitInfo.pCommandBuffers = &cmd).
+//
+// We use vkQueueWaitIdle before AND after our submission to ensure:
+// 1. The core's in-flight work is complete before we submit our readback
+// 2. Our readback is complete before we return the pixel data
+// This avoids the VK_ERROR_DEVICE_LOST that occurs when our submission
+// races with the core's rendering submissions on the shared queue.
+static VkResult cloudplay_submit_one_shot(
+    VkDevice device, VkQueue queue, VkCommandPool pool, VkCommandBuffer cmd)
+{
+    vkEndCommandBuffer(cmd);
+
+    // Wait for any in-flight work from the core to complete first.
+    VkResult res = vkQueueWaitIdle(queue);
+    if (res != VK_SUCCESS) {
+        vkFreeCommandBuffers(device, pool, 1, &cmd);
+        return res;
+    }
+
+    VkSubmitInfo submitInfo = {0};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+
+    res = vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
+    if (res != VK_SUCCESS) {
+        vkFreeCommandBuffers(device, pool, 1, &cmd);
+        return res;
+    }
+
+    // Wait for our readback to complete.
+    res = vkQueueWaitIdle(queue);
+    vkFreeCommandBuffers(device, pool, 1, &cmd);
+    return res;
+}
+
+// Submit a one-shot command buffer using a VkFence for synchronization.
+//
+// Unlike cloudplay_submit_one_shot, this version:
+// - Does NOT call vkQueueWaitIdle before submission (caller must guarantee
+//   the queue is idle, e.g. inside go_wait_sync_index)
+// - Uses a VkFence to wait for just this submission to complete (narrower
+//   than vkQueueWaitIdle which would stall any concurrent work)
+//
+// This is the safe path for readback on the negotiated-device path where
+// Dolphin owns the queue but we know it's idle at wait_sync_index time.
+static VkResult cloudplay_submit_one_shot_fenced(
+    VkDevice device, VkQueue queue, VkCommandPool pool, VkCommandBuffer cmd)
+{
+    vkEndCommandBuffer(cmd);
+
+    // Create a fence to wait on just our submission.
+    VkFenceCreateInfo fenceInfo = {0};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFence fence = VK_NULL_HANDLE;
+    VkResult res = vkCreateFence(device, &fenceInfo, NULL, &fence);
+    if (res != VK_SUCCESS) {
+        vkFreeCommandBuffers(device, pool, 1, &cmd);
+        return res;
+    }
+
+    VkSubmitInfo submitInfo = {0};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+
+    res = vkQueueSubmit(queue, 1, &submitInfo, fence);
+    if (res != VK_SUCCESS) {
+        vkDestroyFence(device, fence, NULL);
+        vkFreeCommandBuffers(device, pool, 1, &cmd);
+        return res;
+    }
+
+    // Wait for our readback to complete (5 second timeout).
+    res = vkWaitForFences(device, 1, &fence, VK_TRUE, 5000000000ULL);
+    vkDestroyFence(device, fence, NULL);
+    vkFreeCommandBuffers(device, pool, 1, &cmd);
+    return res;
+}
+
+// Submit a command buffer with a caller-provided fence (fire-and-forget).
+// Does NOT call vkEndCommandBuffer (caller must do that).
+// Does NOT wait for the fence.
+// The caller is responsible for eventually waiting on the fence and
+// freeing the command buffer.
+static VkResult cloudplay_submit_with_fence(
+    VkQueue queue, VkCommandBuffer cmd, VkFence fence)
+{
+    VkSubmitInfo submitInfo = {0};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    return vkQueueSubmit(queue, 1, &submitInfo, fence);
+}
+
+// cloudplay_vk_create_instance_with_surface_exts creates a VkInstance with
+// the surface extensions needed for headless surface creation:
+//
+//   VK_KHR_surface  (required by both surface extension paths)
+//   VK_EXT_headless_surface  (pure headless, preferred)
+//   VK_KHR_xlib_surface      (Xvfb fallback)
+//
+// We enumerate available instance extensions first and only enable those that
+// are present, so the call degrades gracefully on any driver.
+// Returns a bitmask of which surface extensions were actually enabled:
+//   bit 0 = VK_KHR_surface
+//   bit 1 = VK_EXT_headless_surface
+//   bit 2 = VK_KHR_xlib_surface
 static VkResult cloudplay_vk_create_instance(const char *app_name, const char *engine_name, VkInstance *out_instance) {
     VkApplicationInfo app_info = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -24,9 +133,41 @@ static VkResult cloudplay_vk_create_instance(const char *app_name, const char *e
         .apiVersion = VK_API_VERSION_1_1,
     };
 
+    // Desired surface extensions (in priority order).
+    static const char *kWantedExts[] = {
+        "VK_KHR_surface",
+        "VK_EXT_headless_surface",
+        "VK_KHR_xlib_surface",
+    };
+    static const int kNumWanted = 3;
+
+    // Enumerate available instance extensions.
+    uint32_t avail_count = 0;
+    vkEnumerateInstanceExtensionProperties(NULL, &avail_count, NULL);
+    VkExtensionProperties *avail = NULL;
+    if (avail_count > 0) {
+        avail = (VkExtensionProperties *)malloc(avail_count * sizeof(VkExtensionProperties));
+        vkEnumerateInstanceExtensionProperties(NULL, &avail_count, avail);
+    }
+
+    // Filter wanted list down to those actually supported.
+    const char *enabled[3];
+    uint32_t enabled_count = 0;
+    for (int wi = 0; wi < kNumWanted; wi++) {
+        for (uint32_t ai = 0; ai < avail_count; ai++) {
+            if (strcmp(avail[ai].extensionName, kWantedExts[wi]) == 0) {
+                enabled[enabled_count++] = kWantedExts[wi];
+                break;
+            }
+        }
+    }
+    if (avail) free(avail);
+
     VkInstanceCreateInfo instance_info = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
         .pApplicationInfo = &app_info,
+        .enabledExtensionCount = enabled_count,
+        .ppEnabledExtensionNames = enabled_count > 0 ? enabled : NULL,
     };
 
     return vkCreateInstance(&instance_info, NULL, out_instance);
@@ -126,6 +267,11 @@ type Context struct {
 	// externalHandles is true when instance/device were created externally
 	// (e.g. by the core via negotiation).  Destroy() will skip destroying them.
 	externalHandles bool
+
+	// getDeviceProcAddr is the PFN_vkGetDeviceProcAddr from the render
+	// interface, which resolves to Dolphin's wrapped dispatch table.
+	// When non-nil, submitOneShotViaDispatch uses it instead of the loader.
+	getDeviceProcAddr C.PFN_vkGetDeviceProcAddr
 }
 
 // NewContext creates a headless Vulkan context.
@@ -244,23 +390,32 @@ type InstanceOnlyContext struct {
 // NOT create a VkDevice.  Use when the core will create the device itself via
 // the negotiation interface.
 func NewInstanceOnly() (*InstanceOnlyContext, error) {
-	ctx := &InstanceOnlyContext{}
-
 	appName := C.CString("cloudplay")
 	engName := C.CString("libretro-vulkan")
 	defer C.free(unsafe.Pointer(appName))
 	defer C.free(unsafe.Pointer(engName))
 
-	if res := C.cloudplay_vk_create_instance(appName, engName, &ctx.instance); res != C.VK_SUCCESS {
+	var instance C.VkInstance
+	if res := C.cloudplay_vk_create_instance(appName, engName, &instance); res != C.VK_SUCCESS {
 		return nil, fmt.Errorf("vulkan: vkCreateInstance failed: %d", int(res))
 	}
+	return NewInstanceOnlyFromExisting(unsafe.Pointer(instance))
+}
 
+// NewInstanceOnlyFromExisting wraps an already-created VkInstance and picks a
+// physical device from it. Used when the core creates the instance via v2
+// negotiation and the frontend still needs to create a surface and choose a
+// GPU before delegating device creation.
+func NewInstanceOnlyFromExisting(instance unsafe.Pointer) (*InstanceOnlyContext, error) {
+	ctx := &InstanceOnlyContext{instance: (C.VkInstance)(instance)}
 	ctx.physDevice = C.pick_physical_device(ctx.instance)
 	if ctx.physDevice == nil {
-		C.vkDestroyInstance(ctx.instance, nil)
+		if ctx.instance != nil {
+			C.vkDestroyInstance(ctx.instance, nil)
+			ctx.instance = nil
+		}
 		return nil, errors.New("vulkan: no physical device found")
 	}
-
 	return ctx, nil
 }
 
@@ -399,31 +554,30 @@ func (c *Context) beginOneShot() (C.VkCommandBuffer, error) {
 
 // submitOneShot submits a one-shot command buffer and waits for it with a
 // fence (narrower than vkQueueWaitIdle which stalls all in-flight work).
+//
+// NOTE: The actual submit + fence logic is in the C helper
+// cloudplay_submit_one_shot to avoid Go 1.21+ CGo pointer rules violations
+// (VkSubmitInfo.pCommandBuffers = &cmd would be a Go pointer in a struct
+// passed to C).
 func (c *Context) submitOneShot(cmd C.VkCommandBuffer) error {
-	C.vkEndCommandBuffer(cmd)
-
-	// Create a fence so we wait only for THIS submission, not the whole queue.
-	fenceInfo := C.VkFenceCreateInfo{sType: C.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}
-	var fence C.VkFence
-	if res := C.vkCreateFence(c.Device, &fenceInfo, nil, &fence); res != C.VK_SUCCESS {
-		C.vkFreeCommandBuffers(c.Device, c.CmdPool, 1, &cmd)
-		return fmt.Errorf("vulkan: vkCreateFence: %d", int(res))
+	// On the negotiated-device path, use the fenced submit which doesn't
+	// call vkQueueWaitIdle (the caller guarantees the queue is idle).
+	if c.externalHandles {
+		return c.submitOneShotFenced(cmd)
 	}
-
-	submitInfo := C.VkSubmitInfo{
-		sType:              C.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-		commandBufferCount: 1,
-		pCommandBuffers:    &cmd,
+	res := C.cloudplay_submit_one_shot(c.Device, c.Queue, c.CmdPool, cmd)
+	if res != C.VK_SUCCESS {
+		return fmt.Errorf("vulkan: submitOneShot: %d", int(res))
 	}
-	if res := C.vkQueueSubmit(c.Queue, 1, &submitInfo, fence); res != C.VK_SUCCESS {
-		C.vkDestroyFence(c.Device, fence, nil)
-		C.vkFreeCommandBuffers(c.Device, c.CmdPool, 1, &cmd)
-		return fmt.Errorf("vulkan: vkQueueSubmit: %d", int(res))
-	}
+	return nil
+}
 
-	// Wait only for this fence (up to 5 seconds — more than enough per frame).
-	C.vkWaitForFences(c.Device, 1, &fence, C.VK_TRUE, C.uint64_t(5_000_000_000))
-	C.vkDestroyFence(c.Device, fence, nil)
-	C.vkFreeCommandBuffers(c.Device, c.CmdPool, 1, &cmd)
+// submitOneShotFenced uses a VkFence instead of vkQueueWaitIdle for
+// synchronization.  Avoids interfering with Dolphin's fence tracking.
+func (c *Context) submitOneShotFenced(cmd C.VkCommandBuffer) error {
+	res := C.cloudplay_submit_one_shot_fenced(c.Device, c.Queue, c.CmdPool, cmd)
+	if res != C.VK_SUCCESS {
+		return fmt.Errorf("vulkan: submitOneShotFenced: %d", int(res))
+	}
 	return nil
 }

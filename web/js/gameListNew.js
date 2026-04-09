@@ -12,20 +12,68 @@ let games = [];
 let selectedIndex = 0;
 let onStart = () => {};
 
+const systemLabel = (system = '') => {
+    const labels = {
+        gc: 'GameCube',
+        wii: 'Wii',
+        dreamcast: 'Dreamcast',
+        snes: 'SNES',
+        nes: 'NES',
+        gba: 'Game Boy Advance',
+        pcsx: 'PlayStation',
+        ps2: 'PlayStation 2',
+        n64: 'Nintendo 64',
+        mame: 'Arcade',
+        dos: 'DOS',
+    };
+    return labels[system] || (system ? system.toUpperCase() : 'Other');
+};
+
+const groupedGames = () => {
+    const groups = new Map();
+    games.forEach((game, index) => {
+        const key = game.system || 'other';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push({ game, index });
+    });
+    return [...groups.entries()].sort((a, b) => systemLabel(a[0]).localeCompare(systemLabel(b[0])));
+};
+
 const render = () => {
     containerEl.innerHTML = '';
-    games.forEach((game, i) => {
-        const el = document.createElement('div');
-        el.className = 'game-list-item' + (i === selectedIndex ? ' selected' : '');
-        el.innerHTML =
-            `<div class="game-list-item__title">${game.alias || game.title}</div>` +
-            `<div class="game-list-item__system">${game.system || ''}</div>`;
-        el.addEventListener('click', () => {
-            select(i);
-            onStart();
+
+    groupedGames().forEach(([system, entries]) => {
+        const sectionEl = document.createElement('section');
+        sectionEl.className = 'game-system-card';
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'game-system-card__header';
+        headerEl.innerHTML =
+            `<div class="game-system-card__title">${systemLabel(system)}</div>` +
+            `<div class="game-system-card__count">${entries.length} game${entries.length === 1 ? '' : 's'}</div>`;
+        sectionEl.appendChild(headerEl);
+
+        const listEl = document.createElement('div');
+        listEl.className = 'game-system-card__list';
+
+        entries.forEach(({ game, index }) => {
+            const el = document.createElement('div');
+            el.className = 'game-list-item' + (index === selectedIndex ? ' selected' : '');
+            el.dataset.index = String(index);
+            el.innerHTML =
+                `<div class="game-list-item__title">${game.alias || game.title}</div>` +
+                `<div class="game-list-item__system">${systemLabel(game.system)}</div>`;
+            el.addEventListener('click', () => {
+                select(index);
+                onStart();
+            });
+            listEl.appendChild(el);
         });
-        containerEl.appendChild(el);
+
+        sectionEl.appendChild(listEl);
+        containerEl.appendChild(sectionEl);
     });
+
     scrollIntoView();
 };
 
@@ -89,4 +137,9 @@ export const gameListNew = {
     },
     set onStart(fn) { onStart = fn; },
     get isEmpty() { return games.length === 0; },
+    findByTitle: (title) => {
+        if (!title) return null;
+        const lower = title.toLowerCase();
+        return games.find(g => g.title.toLowerCase() === lower) || null;
+    },
 };

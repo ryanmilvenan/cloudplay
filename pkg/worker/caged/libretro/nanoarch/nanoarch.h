@@ -35,4 +35,7 @@ void same_thread(void *f);
 void *same_thread_with_args2(void *f, int type, void *arg1, void *arg2);
 void same_thread_stop();
 
+void cloudplay_install_crash_handler(void);
+void cloudplay_remove_crash_handler(void);
+
 #endif

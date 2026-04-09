@@ -15,6 +15,7 @@ type App interface {
 	SetDataCb(func([]byte))
 	Input(port int, device byte, data []byte)
 	KbMouseSupport() bool
+	VideoBackend() VideoBackend
 }
 
 type Audio struct {

@@ -1,44 +1,38 @@
 import {
     pub,
-    sub,
     AXIS_CHANGED,
-    DPAD_TOGGLE,
     GAMEPAD_CONNECTED,
     GAMEPAD_DISCONNECTED,
     KEY_PRESSED,
-    KEY_RELEASED
+    KEY_RELEASED,
+    TRIGGER_CHANGED,
 } from 'event';
 import {KEY} from 'input';
 import {getControllerMap} from './controllerMaps.js?v=5';
 import {log} from 'log';
 
 const deadZone = 0.1;
-let joystickMap;
+let controllerMap = getControllerMap('');
+let joystickMap = controllerMap.buttons;
 let joystickState = {};
 let joystickAxes = [];
+let joystickTriggers = [0, 0];
 let joystickIdx;
 let joystickTimer = null;
-let dpadMode = true;
 let currentSystem = '';
 
-function onDpadToggle(checked) {
-    if (dpadMode === checked) {
-        return //error?
-    }
-    if (dpadMode) {
-        dpadMode = false;
-        // reset dpad keys pressed before moving to analog stick mode
-        checkJoystickAxisState(KEY.LEFT, false);
-        checkJoystickAxisState(KEY.RIGHT, false);
-        checkJoystickAxisState(KEY.UP, false);
-        checkJoystickAxisState(KEY.DOWN, false);
-    } else {
-        dpadMode = true;
-        // reset analog stick axes before moving to dpad mode
-        joystickAxes.forEach(function (value, index) {
-            checkJoystickAxis(index, 0);
-        });
-    }
+function releaseDpadState() {
+    checkJoystickAxisState(KEY.LEFT, false);
+    checkJoystickAxisState(KEY.RIGHT, false);
+    checkJoystickAxisState(KEY.UP, false);
+    checkJoystickAxisState(KEY.DOWN, false);
+}
+
+function applyControllerMap(system = '') {
+    currentSystem = system;
+    controllerMap = getControllerMap(currentSystem);
+    joystickMap = controllerMap.buttons;
+    releaseDpadState();
 }
 
 // check state for each axis -> dpad
@@ -57,22 +51,40 @@ function checkJoystickAxis(axis, value) {
     }
 }
 
+function checkJoystickTrigger(idx, value) {
+    if (joystickTriggers[idx] !== value) {
+        joystickTriggers[idx] = value;
+        pub(TRIGGER_CHANGED, {id: idx, value});
+    }
+}
+
 // loop timer for checking joystick state
 function checkJoystickState() {
     let gamepad = navigator.getGamepads()[joystickIdx];
     if (gamepad) {
-        if (dpadMode) {
-            // axis -> dpad
-            let corX = gamepad.axes[0]; // -1 -> 1, left -> right
-            let corY = gamepad.axes[1]; // -1 -> 1, up -> down
+        if (controllerMap.analogAxes) {
+            gamepad.axes.forEach(function (value, index) {
+                checkJoystickAxis(index, value);
+            });
+            releaseDpadState();
+        } else {
+            // D-pad-only platforms: only use the left stick as digital directions.
+            let corX = gamepad.axes[0] || 0; // -1 -> 1, left -> right
+            let corY = gamepad.axes[1] || 0; // -1 -> 1, up -> down
             checkJoystickAxisState(KEY.LEFT, corX <= -0.5);
             checkJoystickAxisState(KEY.RIGHT, corX >= 0.5);
             checkJoystickAxisState(KEY.UP, corY <= -0.5);
             checkJoystickAxisState(KEY.DOWN, corY >= 0.5);
+        }
+
+        if (controllerMap.analogTriggers && gamepad.buttons.length > 7) {
+            const lt = gamepad.buttons[6];
+            const rt = gamepad.buttons[7];
+            checkJoystickTrigger(0, lt ? (lt.value || 0) : 0);
+            checkJoystickTrigger(1, rt ? (rt.value || 0) : 0);
         } else {
-            gamepad.axes.forEach(function (value, index) {
-                checkJoystickAxis(index, value);
-            });
+            checkJoystickTrigger(0, 0);
+            checkJoystickTrigger(1, 0);
         }
 
         // normal button map
@@ -94,13 +106,11 @@ function checkJoystickState() {
 const onGamepadConnected = (e) => {
     let gamepad = e.gamepad;
     log.info(`Gamepad connected at index ${gamepad.index}: ${gamepad.id}. ${gamepad.buttons.length} buttons, ${gamepad.axes.length} axes.`);
+    console.log('[joystick] CONNECTED idx=' + gamepad.index + ' id="' + gamepad.id + '" buttons=' + gamepad.buttons.length + ' axes=' + gamepad.axes.length + ' mapping="' + gamepad.mapping + '"');
 
     joystickIdx = gamepad.index;
 
-    // Load controller map for the current system
-    const map = getControllerMap(currentSystem);
-    joystickMap = map.buttons;
-    dpadMode = map.dpadMode;
+    applyControllerMap(currentSystem);
 
     // reset state
     joystickState = {[KEY.LEFT]: false, [KEY.RIGHT]: false, [KEY.UP]: false, [KEY.DOWN]: false};
@@ -108,18 +118,16 @@ const onGamepadConnected = (e) => {
         joystickState[btnIdx] = false;
     });
 
-    joystickAxes = new Array(gamepad.axes.length).fill(0);
+    joystickAxes = new Array(Math.max(4, gamepad.axes.length)).fill(0);
+    joystickTriggers = [0, 0];
 
-    // looper, too intense?
     if (joystickTimer !== null) {
         clearInterval(joystickTimer);
     }
 
-    joystickTimer = setInterval(checkJoystickState, 10); // milliseconds per hit
+    joystickTimer = setInterval(checkJoystickState, 10);
     pub(GAMEPAD_CONNECTED);
 };
-
-sub(DPAD_TOGGLE, (data) => onDpadToggle(data.checked));
 
 /**
  * Joystick controls.
@@ -141,7 +149,22 @@ sub(DPAD_TOGGLE, (data) => onDpadToggle(data.checked));
  */
 export const joystick = {
     setSystem: (system) => {
-        currentSystem = system || '';
+        applyControllerMap(system || '');
+
+        // If a controller is already connected when the game/system changes,
+        // immediately refresh the active mapping instead of waiting for a
+        // disconnect/reconnect cycle.
+        joystickState = {[KEY.LEFT]: false, [KEY.RIGHT]: false, [KEY.UP]: false, [KEY.DOWN]: false};
+        Object.keys(joystickMap).forEach(function (btnIdx) {
+            joystickState[btnIdx] = false;
+        });
+        joystickTriggers = [0, 0];
+
+        const active = joystickIdx !== undefined && navigator.getGamepads && navigator.getGamepads()[joystickIdx];
+        if (active) {
+            joystickAxes = new Array(Math.max(4, active.axes.length)).fill(0);
+        }
+
         log.info('[input] controller map set for system: ' + (system || 'default'));
     },
     init: () => {
@@ -154,6 +177,16 @@ export const joystick = {
             log.info(`Gamepad disconnected at index ${event.gamepad.index}`);
             pub(GAMEPAD_DISCONNECTED);
         });
+
+        // Important: browsers often do not re-fire gamepadconnected for a pad
+        // that was already connected before this page loaded. Detect those pads
+        // on init so controller polling actually starts.
+        if (navigator.getGamepads) {
+            const existing = Array.from(navigator.getGamepads()).filter(Boolean);
+            if (existing.length > 0) {
+                onGamepadConnected({gamepad: existing[existing.length - 1]});
+            }
+        }
 
         log.info('[input] joystick has been initialized');
     }

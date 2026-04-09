@@ -38,15 +38,18 @@ func deinitVulkanVideo() {}
 func readVulkanFramebuffer(size, _, _ uint) []byte { return make([]byte, size) }
 
 // vulkanZeroCopyFd always returns -1 on non-Vulkan builds.
-func vulkanZeroCopyFd(_, _ uint) (int, error) {
-	return -1, nil
+func vulkanZeroCopyFd(_, _ uint) (int, uint64, error) {
+	return -1, 0, nil
 }
 
 // IsZeroCopyAvailable always returns false on non-Vulkan builds.
 func (n *Nanoarch) IsZeroCopyAvailable() bool { return false }
 
 // ZeroCopyFd always returns -1 on non-Vulkan builds.
-func (n *Nanoarch) ZeroCopyFd(w, h uint) (int, error) { return vulkanZeroCopyFd(w, h) }
+func (n *Nanoarch) ZeroCopyFd(w, h uint) (int, uint64, error) { return vulkanZeroCopyFd(w, h) }
+
+// WaitZeroCopyBlit is a no-op on non-Vulkan builds.
+func (n *Nanoarch) WaitZeroCopyBlit() error { return nil }
 
 // handleSetHWRenderContextNegotiation returns false on non-Vulkan builds.
 func handleSetHWRenderContextNegotiation(_ unsafe.Pointer) bool { return false }

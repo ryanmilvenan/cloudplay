@@ -86,6 +86,7 @@ export const KEYBOARD_KEY_DOWN = 'keyboardKeyDown';
 export const KEYBOARD_KEY_UP = 'keyboardKeyUp';
 
 export const AXIS_CHANGED = 'axisChanged';
+export const TRIGGER_CHANGED = 'triggerChanged';
 export const CONTROLLER_UPDATED = 'controllerUpdated';
 
 export const MOUSE_MOVED = 'mouseMoved'

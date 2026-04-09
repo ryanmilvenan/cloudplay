@@ -15,7 +15,7 @@ package nvenc
 // nvenc_new allocates and opens an h264_nvenc encoder.
 // Returns NULL and sets err_msg (static buffer) on failure.
 static const char *last_err = "";
-nvenc_ctx *nvenc_new(int width, int height, int bitrate_kbps, const char *preset, const char *tune) {
+nvenc_ctx *nvenc_new(int width, int height, int bitrate_kbps, const char *preset, const char *tune, int zero_copy) {
     int ret;
 
     const AVCodec *codec = avcodec_find_encoder_by_name("h264_nvenc");
@@ -41,6 +41,11 @@ nvenc_ctx *nvenc_new(int width, int height, int bitrate_kbps, const char *preset
         free(ctx);
         return NULL;
     }
+    {
+        AVHWDeviceContext *hwdev = (AVHWDeviceContext *)ctx->hw_device_ctx->data;
+        AVCUDADeviceContext *cuda_hw = (AVCUDADeviceContext *)hwdev->hwctx;
+        ctx->cu_ctx = cuda_hw->cuda_ctx;
+    }
 
     ctx->codec_ctx = avcodec_alloc_context3(codec);
     if (!ctx->codec_ctx) {
@@ -56,11 +61,15 @@ nvenc_ctx *nvenc_new(int width, int height, int bitrate_kbps, const char *preset
     ctx->codec_ctx->framerate = (AVRational){60, 1};
     ctx->codec_ctx->pix_fmt   = AV_PIX_FMT_CUDA;  // hardware frames
     ctx->codec_ctx->hw_device_ctx = av_buffer_ref(ctx->hw_device_ctx);
+    ctx->codec_ctx->max_b_frames = 0;
+    ctx->codec_ctx->gop_size = 30;
+    ctx->codec_ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
 
     // Rate control: CBR at given bitrate
     ctx->codec_ctx->bit_rate     = (int64_t)bitrate_kbps * 1000;
     ctx->codec_ctx->rc_max_rate  = (int64_t)bitrate_kbps * 1000;
-    ctx->codec_ctx->rc_buffer_size = (int64_t)bitrate_kbps * 1000 * 2; // 2-second buffer
+    // Tight rc buffer (~2 frames at 60fps) to avoid burst/starvation cycles
+    ctx->codec_ctx->rc_buffer_size = (int64_t)bitrate_kbps * 1000 / 30;
 
     // Low-latency options via AVOptions
     if (preset && preset[0]) {
@@ -76,6 +85,7 @@ nvenc_ctx *nvenc_new(int width, int height, int bitrate_kbps, const char *preset
     av_opt_set(ctx->codec_ctx->priv_data, "rc", "cbr", 0);
     av_opt_set(ctx->codec_ctx->priv_data, "zerolatency", "1", 0);
     av_opt_set_int(ctx->codec_ctx->priv_data, "delay", 0, 0);
+    av_opt_set(ctx->codec_ctx->priv_data, "rc-lookahead", "0", 0);
     av_opt_set(ctx->codec_ctx->priv_data, "profile", "baseline", 0);
 
     // Set up hardware frames context so the encoder gets CUDA surfaces
@@ -89,10 +99,10 @@ nvenc_ctx *nvenc_new(int width, int height, int bitrate_kbps, const char *preset
     }
     AVHWFramesContext *frames_ctx = (AVHWFramesContext *)hw_frames_ref->data;
     frames_ctx->format    = AV_PIX_FMT_CUDA;
-    frames_ctx->sw_format = AV_PIX_FMT_YUV420P;  // input is I420
+    frames_ctx->sw_format = zero_copy ? AV_PIX_FMT_NV12 : AV_PIX_FMT_YUV420P;
     frames_ctx->width     = width;
     frames_ctx->height    = height;
-    frames_ctx->initial_pool_size = 4;
+    frames_ctx->initial_pool_size = 8;
     ret = av_hwframe_ctx_init(hw_frames_ref);
     if (ret < 0) {
         last_err = "failed to init hw frames context";
@@ -222,8 +232,12 @@ import "C"
 
 import (
 	"fmt"
+	"log"
+	"sync/atomic"
 	"unsafe"
 )
+
+var nvencDiagFrame int64
 
 // NVENC implements the encoder.Encoder interface using FFmpeg's h264_nvenc.
 // Build with the `nvenc` build tag to include this encoder.
@@ -245,25 +259,28 @@ type Options struct {
 	Preset string
 	// NVENC tune: ll (low latency), ull (ultra low latency), hq (high quality). Default: "ll"
 	Tune string
+	// ZeroCopy: if true, use NV12 sw_format for hw_frames_ctx (zero-copy path
+	// writes NV12 directly via PTX kernels). If false, use YUV420P (CPU upload path).
+	ZeroCopy bool
 }
 
 // NewEncoder creates a new NVENC encoder for the given dimensions.
 func NewEncoder(w, h int, opts *Options) (*NVENC, error) {
 	if opts == nil {
 		opts = &Options{
-			Bitrate: 4000,
-			Preset:  "p4",
-			Tune:    "ll",
+			Bitrate: 15000,
+			Preset:  "p5",
+			Tune:    "ull",
 		}
 	}
 	if opts.Bitrate <= 0 {
-		opts.Bitrate = 4000
+		opts.Bitrate = 15000
 	}
 	if opts.Preset == "" {
-		opts.Preset = "p4"
+		opts.Preset = "p5"
 	}
 	if opts.Tune == "" {
-		opts.Tune = "ll"
+		opts.Tune = "ull"
 	}
 
 	preset := C.CString(opts.Preset)
@@ -271,7 +288,11 @@ func NewEncoder(w, h int, opts *Options) (*NVENC, error) {
 	defer C.free(unsafe.Pointer(preset))
 	defer C.free(unsafe.Pointer(tune))
 
-	ctx := C.nvenc_new(C.int(w), C.int(h), C.int(opts.Bitrate), preset, tune)
+	zcFlag := C.int(0)
+	if opts.ZeroCopy {
+		zcFlag = C.int(1)
+	}
+	ctx := C.nvenc_new(C.int(w), C.int(h), C.int(opts.Bitrate), preset, tune, zcFlag)
 	if ctx == nil {
 		errMsg := C.GoString(C.nvenc_last_error())
 		return nil, fmt.Errorf("nvenc: %s", errMsg)
@@ -294,14 +315,32 @@ func (e *NVENC) Encode(yuv []byte) []byte {
 		return nil
 	}
 
+	// Vertical flip for GL cores (OpenGL renders bottom-up).
+	// x264 handles this natively via X264_CSP_VFLIP; NVENC has no equivalent,
+	// so we reverse the row order of each I420 plane before upload.
+	if e.flipped {
+		flipI420(yuv, e.width, e.height)
+	}
+
+	// DIAG: log input/output sizes every 60 frames
+	n := atomic.AddInt64(&nvencDiagFrame, 1)
+	diagThisFrame := n%60 == 1
+
 	var outSize C.int
 	data := C.nvenc_encode(e.ctx, (*C.uint8_t)(unsafe.SliceData(yuv)), &outSize)
 	if data == nil || outSize == 0 {
+		if diagThisFrame {
+			log.Printf("[cloudplay diag] nvenc.Encode frame=%d input_len=%d output=nil/0 (EAGAIN or error)", n, len(yuv))
+		}
 		return nil
 	}
 	// Copy out before the next encode call overwrites the packet buffer.
 	result := make([]byte, int(outSize))
 	copy(result, unsafe.Slice((*byte)(unsafe.Pointer(data)), int(outSize)))
+
+	if diagThisFrame {
+		log.Printf("[cloudplay diag] nvenc.Encode frame=%d input_len=%d output_len=%d", n, len(yuv), len(result))
+	}
 	return result
 }
 
@@ -317,11 +356,39 @@ func (e *NVENC) Info() string {
 	return fmt.Sprintf("h264_nvenc (preset=%s, tune=%s, bitrate=%dkbps)", e.preset, e.tune, e.bitrate)
 }
 
-// SetFlip stores the flip flag. Vertical flip for NVENC would require a
-// separate preprocessing step; it is a no-op here unless the caller handles
-// it at the YUV level before passing frames in.
+// SetFlip enables vertical flipping of frames before encoding.
+// GL-based cores render with a bottom-left origin, producing upside-down
+// frames. This flag causes Encode to reverse row order in the I420 planes
+// before uploading to NVENC.
 func (e *NVENC) SetFlip(b bool) {
 	e.flipped = b
+}
+
+// flipI420 reverses the row order of each plane in an I420 buffer in-place.
+// Y plane: width × height, U plane: width/2 × height/2, V plane: same as U.
+func flipI420(yuv []byte, width, height int) {
+	ySize := width * height
+	uvW := width >> 1
+	uvH := height >> 1
+
+	// Flip Y plane
+	flipPlane(yuv[:ySize], width, height)
+	// Flip U plane
+	flipPlane(yuv[ySize:ySize+uvW*uvH], uvW, uvH)
+	// Flip V plane
+	flipPlane(yuv[ySize+uvW*uvH:], uvW, uvH)
+}
+
+// flipPlane reverses row order in a contiguous plane buffer in-place.
+func flipPlane(plane []byte, stride, rows int) {
+	tmp := make([]byte, stride)
+	for top, bot := 0, rows-1; top < bot; top, bot = top+1, bot-1 {
+		topOff := top * stride
+		botOff := bot * stride
+		copy(tmp, plane[topOff:topOff+stride])
+		copy(plane[topOff:topOff+stride], plane[botOff:botOff+stride])
+		copy(plane[botOff:botOff+stride], tmp)
+	}
 }
 
 // Shutdown frees all FFmpeg/CUDA resources held by the encoder.

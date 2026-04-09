@@ -39,6 +39,10 @@ sub(KB_MOUSE_FLAG, () => {
 export const input = {
     state: input_state,
     init,
+    joystick,
+    keyboard,
+    pointer,
+    touch,
     retropad: {
         ...retropad,
         toggle(on = true) {

@@ -2,7 +2,9 @@ package media
 
 import (
 	"fmt"
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/giongto35/cloud-game/v3/pkg/config"
@@ -11,6 +13,8 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/app"
 )
+
+var mediaDiagFrame int64
 
 // ZeroCopyVideoEncoder is the interface for Phase 3 GPU-only encode.
 //
@@ -208,7 +212,17 @@ func (wmp *WebrtcMediaPipe) ProcessVideo(v app.Video) []byte {
 	}
 
 	// CPU path: standard YUV conversion + software / NVENC CPU-upload encode.
-	return wmp.Video().Encode(encoder.InFrame(v.Frame))
+	result := wmp.Video().Encode(encoder.InFrame(v.Frame))
+
+	// DIAG: log output length every 60 frames
+	n := atomic.AddInt64(&mediaDiagFrame, 1)
+	if n%60 == 1 {
+		zeroCopy := wmp.ZeroCopyActive()
+		log.Printf("[cloudplay diag] ProcessVideo frame=%d zerocopy_active=%v frame_w=%d frame_h=%d frame_data_len=%d encoded_len=%d",
+			n, zeroCopy, v.Frame.W, v.Frame.H, len(v.Frame.Data), len(result))
+	}
+
+	return result
 }
 
 // SetZeroCopyEncoder registers the NVENC encoder for the Phase 3 path and
@@ -264,8 +278,19 @@ func (wmp *WebrtcMediaPipe) ProcessVideoZeroCopy() []byte {
 	// and manages devPtr + bufSize internally via its getFd closure.
 	out, err := enc.EncodeFromDevPtr(0, 0)
 	if err != nil {
+		// DIAG: log zero-copy errors (not just every 60th — these are important)
+		n := atomic.AddInt64(&mediaDiagFrame, 1)
+		if n%60 == 1 {
+			log.Printf("[cloudplay diag] ProcessVideoZeroCopy frame=%d encode_err=%v", n, err)
+		}
 		wmp.log.Error().Err(err).Msg("media: zero-copy encode error")
 		return nil
+	}
+
+	// DIAG: log zero-copy output length
+	n := atomic.AddInt64(&mediaDiagFrame, 1)
+	if n%60 == 1 {
+		log.Printf("[cloudplay diag] ProcessVideoZeroCopy frame=%d output_len=%d", n, len(out))
 	}
 	return out
 }

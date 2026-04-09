@@ -1,10 +1,5 @@
 package nanoarch
 
-import (
-	"encoding/binary"
-	"sync/atomic"
-)
-
 /*
 #include <stdint.h>
 #include "libretro.h"
@@ -17,6 +12,15 @@ void input_cache_set_mouse(int16_t dx, int16_t dy, uint8_t buttons);
 void input_cache_clear(void);
 */
 import "C"
+
+import (
+	"encoding/binary"
+	"fmt"
+	stlos "os"
+	"sync/atomic"
+)
+
+var inputDiagCount int64
 
 const (
 	maxPort    = 4
@@ -61,6 +65,26 @@ type InputState [maxPort]struct {
 func (s *InputState) SetInput(port int, data []byte) {
 	if len(data) < 2 {
 		return
+	}
+
+	// DIAG: log raw input bytes for the first 30 frames per port
+	n := atomic.AddInt64(&inputDiagCount, 1)
+	if n <= 30 || n%300 == 0 {
+		fmt.Fprintf(stlos.Stderr, "[DIAG input] port=%d len=%d raw=%v\n", port, len(data), data)
+		if len(data) >= 10 {
+			btns := binary.LittleEndian.Uint16(data[0:])
+			lx := int16(binary.LittleEndian.Uint16(data[2:]))
+			ly := int16(binary.LittleEndian.Uint16(data[4:]))
+			rx := int16(binary.LittleEndian.Uint16(data[6:]))
+			ry := int16(binary.LittleEndian.Uint16(data[8:]))
+			l2, r2 := int16(0), int16(0)
+			if len(data) >= 14 {
+				l2 = int16(binary.LittleEndian.Uint16(data[10:]))
+				r2 = int16(binary.LittleEndian.Uint16(data[12:]))
+			}
+			fmt.Fprintf(stlos.Stderr, "[DIAG input] port=%d btns=0x%04x LX=%d LY=%d RX=%d RY=%d L2=%d R2=%d\n",
+				port, btns, lx, ly, rx, ry, l2, r2)
+		}
 	}
 
 	// Buttons

@@ -4,6 +4,7 @@ import {api} from 'api';
 import {
     APP_VIDEO_CHANGED,
     AXIS_CHANGED,
+    TRIGGER_CHANGED,
     CONTROLLER_UPDATED,
     DPAD_TOGGLE,
     FULLSCREEN_CHANGE,
@@ -67,6 +68,9 @@ let lastState;
 
 // first user interaction
 let interacted = false;
+let sharedSessionFallbackTimer;
+
+const SHARED_SESSION_FALLBACK_MS = 20000;
 
 const helpOverlay = document.getElementById('help-overlay');
 const playerIndex = document.getElementById('playeridx');
@@ -106,12 +110,30 @@ const setState = (newState = app.state.eden) => {
 };
 
 const onConnectionReady = () => {
+    clearTimeout(sharedSessionFallbackTimer);
+    sharedSessionFallbackTimer = null;
     if (room.id) {
-        // Late-join: show slot picker
-        showSlotPicker();
+        message.show('Joining current session...');
+        startGame();
     } else {
         state.menuReady();
     }
+};
+
+const parseGameNameFromRoomId = (roomId = '') => {
+    const parts = roomId.split('___');
+    return parts.length > 1 ? parts[1] : '';
+};
+
+const activeGameTitle = (preferRoom = false) => {
+    if (preferRoom) {
+        return parseGameNameFromRoomId(room.id) || 'Current Session';
+    }
+    const game = gameListNew.selectedGame;
+    if (game) {
+        return game.alias || game.title;
+    }
+    return parseGameNameFromRoomId(room.id) || 'Current Session';
 };
 
 const onLatencyCheck = async (data) => {
@@ -144,6 +166,8 @@ const helpScreen = {
 // ── New game list screen ──
 
 const showMenuScreen = () => {
+    clearTimeout(sharedSessionFallbackTimer);
+    sharedSessionFallbackTimer = null;
     log.debug('[control] loading menu screen');
 
     gui.hide(keyButtons[KEY.SAVE]);
@@ -160,6 +184,22 @@ const showMenuScreen = () => {
 
 // Wire up new game list start callback
 gameListNew.onStart = () => startGame();
+
+const armSharedSessionFallback = () => {
+    clearTimeout(sharedSessionFallbackTimer);
+    sharedSessionFallbackTimer = null;
+
+    if (!room.id) return;
+
+    sharedSessionFallbackTimer = setTimeout(() => {
+        if (!room.id || state === app.state.game || webrtc.isInputReady()) return;
+
+        log.warn(`[control] shared session attach timed out after ${SHARED_SESSION_FALLBACK_MS}ms; falling back to game list`);
+        room.reset();
+        message.show('Shared session unavailable. Pick a game.');
+        showMenuScreen();
+    }, SHARED_SESSION_FALLBACK_MS);
+};
 
 // ── Start game ──
 
@@ -194,7 +234,8 @@ const startGame = () => {
     gameListNew.hide();
     screen.toggle(stream);
 
-    const selectedTitle = gameListNew.selected || gameList.selected;
+    const joiningSharedSession = !!room.id;
+    const selectedTitle = gameListNew.selected || gameList.selected || parseGameNameFromRoomId(room.id);
 
     api.game.start(
         selectedTitle,
@@ -207,17 +248,24 @@ const startGame = () => {
     gameList.disable();
     gameListNew.disable();
 
-    // Set controller map for this system before enabling retropad
-    const game = gameListNew.selectedGame;
+    // Set controller map for this system before enabling retropad.
+    // When joining a shared session the user never selected a game, so
+    // resolve the game entry from the list using the title encoded in the
+    // roomId. Without this, the joining player keeps the default map and
+    // can lose the correct analog layout.
+    const game = joiningSharedSession
+        ? gameListNew.findByTitle(parseGameNameFromRoomId(room.id))
+        : gameListNew.selectedGame;
     if (game && game.system) {
         input.joystick.setSystem(game.system);
     }
 
     input.retropad.toggle(false);
+    input.retropad.reset();
     input.retropad.toggle(true);
 
     // Enable overlay
-    overlay.setGameTitle(game ? (game.alias || game.title) : selectedTitle);
+    overlay.setGameTitle(game ? (game.alias || game.title) : activeGameTitle(joiningSharedSession));
     overlay.setCurrentSlot(+playerIndex.value - 1);
     overlay.enable();
 };
@@ -231,21 +279,14 @@ overlay.onSlotChange = (slot) => {
     updatePlayerIndex(slot);
 };
 
-overlay.onInvite = () => {
-    saveGame();
-    room.copyToClipboard();
-    message.show('Link copied!');
-};
-
 overlay.onSave = () => saveGame();
 overlay.onLoad = () => loadGame();
 
 overlay.onLeave = () => {
+    message.show('Killing session...');
     overlay.disable();
     input.retropad.toggle(false);
     api.game.quit(room.id);
-    room.reset();
-    window.location = window.location.pathname;
 };
 
 // ── Late-join slot picker ──
@@ -259,6 +300,21 @@ const showSlotPicker = () => {
 
 const hideSlotPicker = () => {
     slotPickerEl.classList.add('hidden');
+};
+
+const resetToMenu = ({reconnect = false} = {}) => {
+    clearTimeout(sharedSessionFallbackTimer);
+    sharedSessionFallbackTimer = null;
+    overlay.disable();
+    hideSlotPicker();
+    input.retropad.toggle(false);
+    room.reset();
+    gameList.disable();
+    gameListNew.disable();
+    showMenuScreen();
+    if (reconnect) {
+        api.server.initWebrtc();
+    }
 };
 
 slotPickerBtns.forEach(btn => {
@@ -308,6 +364,15 @@ const onMessage = (m) => {
             break;
         case api.endpoint.GAME_ERROR_NO_FREE_SLOTS:
             pub(GAME_ERROR_NO_FREE_SLOTS);
+            break;
+        case api.endpoint.GAME_QUIT:
+            // Server broadcast: the active session was killed by another user.
+            // Reset everyone to the game list and reinit WebRTC for the next pick.
+            if (state === app.state.game || room.id) {
+                message.show('Session ended.');
+                webrtc.stop();
+                resetToMenu({reconnect: true});
+            }
             break;
         case api.endpoint.APP_VIDEO_CHANGE:
             pub(APP_VIDEO_CHANGED, {...payload})
@@ -374,6 +439,10 @@ const onAxisChanged = (data) => {
     }
 
     state.axisChanged(data.id, data.value);
+};
+
+const onTriggerChanged = (data) => {
+    input.retropad.setTriggerChanged(data.id, data.value);
 };
 
 const handleToggle = (force = false) => {
@@ -503,9 +572,7 @@ const app = {
 
                 switch (key) {
                     case KEY.JOIN: // or SHARE
-                        saveGame();
-                        room.copyToClipboard();
-                        message.show('Link copied!');
+                        message.show('Use the main site URL to join the shared session');
                         break;
                     case KEY.SAVE:
                         saveGame();
@@ -529,11 +596,10 @@ const app = {
                         updatePlayerIndex(3);
                         break;
                     case KEY.QUIT:
+                        message.show('Killing session...');
                         overlay.disable();
                         input.retropad.toggle(false)
                         api.game.quit(room.id)
-                        room.reset();
-                        window.location = window.location.pathname;
                         break;
                     case KEY.RESET:
                         api.game.reset(room.id)
@@ -593,13 +659,18 @@ sub(WEBRTC_NEW_CONNECTION, (data) => {
     workerManager.whoami(data.wid);
     webrtc.onData = (x) => onMessage(api.decode(x.data))
     webrtc.start(data.ice);
+    if (data.roomId) {
+        room.id = data.roomId;
+    }
     api.server.initWebrtc()
     // Set games immediately — show menu without waiting for WebRTC
     gameList.set(data.games);
     gameListNew.set(data.games);
     // Show the game list as soon as we have the game data
-    if (state === app.state.eden || state === app.state.menu) {
+    if (!data.roomId && (state === app.state.eden || state === app.state.menu)) {
         showMenuScreen();
+    } else if (data.roomId) {
+        armSharedSessionFallback();
     }
 });
 sub(WEBRTC_ICE_CANDIDATE_FOUND, (data) => api.server.sendIceCandidate(data.candidate));
@@ -609,8 +680,18 @@ sub(WEBRTC_ICE_CANDIDATE_RECEIVED, (data) => webrtc.addCandidate(data.candidate)
 sub(WEBRTC_ICE_CANDIDATES_FLUSH, () => webrtc.flushCandidates());
 sub(WEBRTC_CONNECTION_READY, onConnectionReady);
 sub(WEBRTC_CONNECTION_CLOSED, () => {
-    input.retropad.toggle(false)
     webrtc.stop();
+    if (state === app.state.game) {
+        // In-game disconnect: reset fully and reconnect.
+        resetToMenu({reconnect: true});
+    } else if (state !== app.state.eden && room.id) {
+        // Mid-session disconnect (not fresh page load): reset and reconnect.
+        resetToMenu({reconnect: true});
+    } else {
+        // Fresh page load or already at menu: don't wipe room.id.
+        // The new InitSession may have already set it.
+        input.retropad.toggle(false);
+    }
 });
 sub(LATENCY_CHECK_REQUESTED, onLatencyCheck);
 sub(GAMEPAD_CONNECTED, () => message.show('Gamepad connected'));
@@ -630,6 +711,7 @@ sub(KEY_RELEASED, onKeyRelease);
 
 sub(SETTINGS_CHANGED, () => message.show('Settings have been updated'));
 sub(AXIS_CHANGED, onAxisChanged);
+sub(TRIGGER_CHANGED, onTriggerChanged);
 sub(CONTROLLER_UPDATED, data => webrtc.input(data));
 sub(RECORDING_TOGGLED, handleRecording);
 sub(RECORDING_STATUS_CHANGED, handleRecordingStatus);

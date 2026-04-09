@@ -3,6 +3,7 @@ package libretro
 import (
 	"errors"
 	"fmt"
+	stdos "os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -53,6 +54,7 @@ type Emulator interface {
 }
 
 type Frontend struct {
+	shutdownDone chan struct{} // closed when Shutdown() has completed
 	conf    config.Emulator
 	done    chan struct{}
 	log     *logger.Logger
@@ -127,14 +129,15 @@ func NewFrontend(conf config.Emulator, log *logger.Logger) (*Frontend, error) {
 
 	// set global link to the Libretro
 	f := &Frontend{
-		conf:    conf,
-		done:    make(chan struct{}),
-		log:     log,
-		onAudio: noAudio,
-		onData:  noData,
-		onVideo: noVideo,
-		storage: store,
-		th:      conf.Threads,
+		conf:         conf,
+		done:         make(chan struct{}),
+		log:          log,
+		onAudio:      noAudio,
+		onData:       noData,
+		onVideo:      noVideo,
+		shutdownDone: make(chan struct{}),
+		storage:      store,
+		th:           conf.Threads,
 	}
 	f.linkNano(nano)
 
@@ -237,6 +240,7 @@ func (f *Frontend) Shutdown() {
 	f.SetVideoCb(noVideo)
 	lastFrame = nil
 	f.mu.Unlock()
+	close(f.shutdownDone)
 	f.log.Debug().Msgf("frontend shutdown done")
 }
 
@@ -352,16 +356,24 @@ func (f *Frontend) Start() {
 
 			// timer reset
 			//
-			// adding targetFrameTime to the previous start
-			// prevents drift, if one frame was late,
-			// we try to catch up in the next frame
-			lastFrameStart = lastFrameStart.Add(targetFrameTime)
-
-			// if execution was paused or heavily delayed,
-			// reset lastFrameStart so we don't try to run
-			// a bunch of frames instantly to catch up
-			if time.Since(lastFrameStart) > targetFrameTime*lateFramesThreshold {
+			// Historically we add targetFrameTime to the previous frame start so a
+			// slightly late frame gets caught up on the next tick. That works for
+			// CPU-bound paths, but on the Vulkan zero-copy path it creates visible
+			// burst pacing: a late frame is followed by a too-fast frame, which the
+			// browser sees as jumpy/skippy playback.
+			//
+			// For Vulkan, prioritize smooth real-time pacing over catch-up. If we're
+			// already late, reset the schedule to now instead of trying to sprint.
+			if f.nano.IsVulkan() && sleepTime <= 0 {
 				lastFrameStart = time.Now()
+			} else {
+				lastFrameStart = lastFrameStart.Add(targetFrameTime)
+				// if execution was paused or heavily delayed,
+				// reset lastFrameStart so we don't try to run
+				// a bunch of frames instantly to catch up
+				if time.Since(lastFrameStart) > targetFrameTime*lateFramesThreshold {
+					lastFrameStart = time.Now()
+				}
 			}
 		}
 	}
@@ -414,6 +426,36 @@ func (f *Frontend) Input(port int, device byte, data []byte) {
 	}
 }
 
+func (f *Frontend) VideoBackend() app.VideoBackend { return f }
+
+func (f *Frontend) Kind() app.RenderBackendKind {
+	if f.nano == nil {
+		return app.RenderBackendSoftware
+	}
+	if f.nano.IsVulkan() {
+		return app.RenderBackendVulkan
+	}
+	if f.nano.IsGL() {
+		return app.RenderBackendOpenGL
+	}
+	return app.RenderBackendSoftware
+}
+
+func (f *Frontend) Name() string {
+	switch f.Kind() {
+	case app.RenderBackendVulkan:
+		return "vulkan"
+	case app.RenderBackendOpenGL:
+		return "opengl-sdl"
+	default:
+		return "software"
+	}
+}
+
+func (f *Frontend) SupportsZeroCopy() bool { return f.IsZeroCopyAvailable() }
+
+func (f *Frontend) WaitFrameReady() error { return f.WaitZeroCopyBlit() }
+
 func (f *Frontend) ViewportCalc() (nw int, nh int) {
 	w, h := f.FrameSize()
 	nw, nh = w, h
@@ -423,6 +465,7 @@ func (f *Frontend) ViewportCalc() (nw int, nh int) {
 	}
 
 	f.log.Debug().Msgf("viewport: %dx%d -> %dx%d", w, h, nw, nh)
+	f.log.Info().Msgf("[cloudplay diag] frontend viewport frameSize=%dx%d viewport=%dx%d portrait=%v", w, h, nw, nh, f.IsPortrait())
 
 	return
 }
@@ -444,6 +487,22 @@ func (f *Frontend) Close() {
 	f.SaveStateFs = ""
 
 	f.mui.Unlock()
+
+	// Wait for Shutdown() to fully complete before returning.
+	// This prevents the next game launch from colliding with a
+	// still-running retro_unload_game / deinit_video / closeLib teardown.
+	//
+	// Some LibCo cores (LRPS2) have retro_run() calls that never return
+	// when the video callback is a no-op (Stopped=true). In that case
+	// Shutdown() never fires, so we force-exit the worker process after
+	// a timeout. The supervisor will restart the worker cleanly.
+	select {
+	case <-f.shutdownDone:
+	case <-time.After(5 * time.Second):
+		f.log.Error().Msg("frontend close: core stuck in retro_run, forcing worker restart")
+		stdos.Exit(1)
+	}
+
 	f.log.Debug().Msgf("frontend closed")
 }
 
@@ -512,8 +571,9 @@ func (f *Frontend) IsZeroCopyAvailable() bool {
 	return f.nano.IsZeroCopyAvailable()
 }
 
-// ZeroCopyFd returns the Linux file descriptor for the exportable Vulkan
-// device memory of the current frame (width w × height h in pixels).
+// ZeroCopyFd returns the Linux file descriptor plus allocation size for the
+// exportable Vulkan device memory of the current frame (width w × height h in
+// pixels).
 //
 // Must be called after a frame has been rendered.  Returns (-1, err) when
 // Phase 3 is not available or the blit has not been performed yet.
@@ -521,8 +581,14 @@ func (f *Frontend) IsZeroCopyAvailable() bool {
 // The fd is owned by the Vulkan allocation and must NOT be closed by the
 // caller.  CUDA keeps the import mapping alive for the lifetime of the
 // allocation.
-func (f *Frontend) ZeroCopyFd(w, h uint) (int, error) {
+func (f *Frontend) ZeroCopyFd(w, h uint) (int, uint64, error) {
 	return f.nano.ZeroCopyFd(w, h)
+}
+
+// WaitZeroCopyBlit waits for the most recent async Vulkan zero-copy blit to
+// complete before the encoder reads from the exported buffer.
+func (f *Frontend) WaitZeroCopyBlit() error {
+	return f.nano.WaitZeroCopyBlit()
 }
 
 func (f *Frontend) autosave(periodSec int) {

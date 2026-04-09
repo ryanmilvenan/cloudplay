@@ -262,6 +262,52 @@ emulator:
           options:
             mgba_audio_low_pass_filter: disabled
             mgba_audio_low_pass_range: 50
+        gc:
+          lib: dolphin_libretro
+          roms: [ "iso", "nkit.iso", "gcm", "gcz", "rvz" ]
+          isGlAllowed: true
+          usesLibCo: true
+          vfr: true
+          options:
+            dolphin_cpu_core: 5
+            dolphin_fastmem: disabled
+            dolphin_fastmem_arena: disabled
+            dolphin_main_cpu_thread: enabled
+            dolphin_renderer: Hardware
+            dolphin_shader_compilation_mode: 0
+            dolphin_wait_for_shaders: disabled
+        wii:
+          lib: dolphin_libretro
+          folder: wii
+          roms: [ "wbfs", "ciso", "wad", "wia", "rvz", "iso", "m3u" ]
+          isGlAllowed: true
+          usesLibCo: true
+          vfr: true
+          options:
+            dolphin_cpu_core: 5
+            dolphin_fastmem: disabled
+            dolphin_fastmem_arena: disabled
+            dolphin_main_cpu_thread: disabled
+            dolphin_renderer: Hardware
+            dolphin_shader_compilation_mode: 0
+            dolphin_wait_for_shaders: disabled
+        dreamcast:
+          lib: flycast_libretro
+          folder: dreamcast
+          roms: [ "chd", "gdi", "cdi", "cue" ]
+          isGlAllowed: true
+          usesLibCo: true
+          vfr: true
+        ps2:
+          lib: pcsx2_libretro
+          folder: ps2
+          roms: [ "iso", "chd", "cso", "cue", "bin", "gz" ]
+          isGlAllowed: true
+          usesLibCo: true
+          vfr: true
+          options:
+            pcsx2_bios: SCPH-70012_BIOS_V12_USA_200.bin
+            pcsx2_renderer: Software
         pcsx:
           lib: pcsx_rearmed_libretro
           roms: [ "cue", "chd" ]
@@ -301,12 +347,13 @@ emulator:
           options:
             "mupen64plus-169screensize": 640x360
             "mupen64plus-43screensize": 320x240
-            "mupen64plus-EnableCopyColorToRDRAM": Off
-            "mupen64plus-EnableCopyDepthToRDRAM": Off
-            "mupen64plus-EnableEnhancedTextureStorage": True
+            # Profile A: more predictable GLideN64 (2026-04-04 config sweep)
+            "mupen64plus-EnableCopyColorToRDRAM": Sync
+            "mupen64plus-EnableCopyDepthToRDRAM": Software
+            "mupen64plus-EnableEnhancedTextureStorage": False
             "mupen64plus-EnableFBEmulation": True
-            "mupen64plus-EnableLegacyBlending": True
-            "mupen64plus-FrameDuping": True
+            "mupen64plus-EnableLegacyBlending": False
+            "mupen64plus-FrameDuping": False
             "mupen64plus-MaxTxCacheSize": 8000
             "mupen64plus-ThreadedRenderer": False
             "mupen64plus-cpucore": dynamic_recompiler
@@ -337,13 +384,14 @@ encoder:
     # so we keep the frame buffer roughly half of that size or 2 RTC packets per frame
     # (deprecated) due to frames
     frame: 10
-    # dynamic frames for Opus encoder
+    # slightly larger Opus packets reduce churn and give audio more cushion
+    # than the earlier 10/5ms setup.
     frames:
+      - 20
       - 10
-      - 5
     # speex (2), linear (1) or nearest neighbour (0) audio resampler
-    # linear should sound slightly better than 0
-    resampler: 2
+    # linear is a good trade-off between quality and CPU cost.
+    resampler: 1
   video:
     # h264, vpx (vp8) or vp9
     codec: h264
@@ -377,11 +425,11 @@ encoder:
     # h264_nvenc encoder settings (used when codec: h264_nvenc)
     nvenc:
       # target bitrate in kbps (CBR mode)
-      bitrate: 4000
+      bitrate: 15000
       # NVENC preset: p1 (fastest) … p7 (best quality)
-      preset: p4
+      preset: p5
       # NVENC tune: ll (low latency), ull (ultra-low latency), hq (high quality)
-      tune: ll
+      tune: ull
     # Phase 3c Vulkan→CUDA→NVENC zero-copy encode path.
     # Requires: codec=h264_nvenc + -tags 'vulkan nvenc' build + NVIDIA Linux driver.
     #
@@ -393,11 +441,11 @@ encoder:
     #
     # If PTX JIT fails on the target driver (very old drivers), the path degrades
     # gracefully to a raw GPU copy (stream stays up, colours incorrect).  The CPU
-    # readback path is always unaffected and remains the default (zeroCopy: false).
+    # readback path remains available as fallback if zero-copy cannot arm.
     #
     # ⚠ EXPERIMENTAL: tested only on NVIDIA RTX 30xx with driver ≥ 525.
     #   Verify output with a test stream before using in production.
-    zeroCopy: false
+    zeroCopy: true
 
 # game recording
 # (experimental)

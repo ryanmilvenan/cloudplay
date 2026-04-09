@@ -4,6 +4,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/config"
 	"github.com/giongto35/cloud-game/v3/pkg/games"
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/app"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/libretro/manager"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/cloud"
 )
@@ -95,6 +96,7 @@ func (c *Caged) ViewportSize() (int, int)         { return c.base.ViewportSize()
 func (c *Caged) Scale() float64                   { return c.Emulator.Scale() }
 func (c *Caged) Input(p int, d byte, data []byte) { c.base.Input(p, d, data) }
 func (c *Caged) KbMouseSupport() bool             { return c.base.KbMouseSupport() }
+func (c *Caged) VideoBackend() app.VideoBackend   { return c.base.VideoBackend() }
 func (c *Caged) Start()                           { go c.Emulator.Start() }
 func (c *Caged) SetSaveOnClose(v bool)            { c.base.SaveOnClose = v }
 func (c *Caged) SetSessionId(name string)         { c.base.SetSessionId(name) }
@@ -105,6 +107,11 @@ func (c *Caged) IsSupported() error               { return c.base.IsSupported() 
 // structurally available (Vulkan context active + device has external memory).
 func (c *Caged) IsZeroCopyAvailable() bool { return c.base.IsZeroCopyAvailable() }
 
-// ZeroCopyFd returns the Linux fd for the exportable Vulkan device memory of
-// the current rendered frame.  Returns (-1, err) when unavailable.
-func (c *Caged) ZeroCopyFd(w, h uint) (int, error) { return c.base.ZeroCopyFd(w, h) }
+// ZeroCopyFd returns the Linux fd plus allocation size for the exportable
+// Vulkan device memory of the current rendered frame. Returns (-1, 0, err)
+// when unavailable.
+func (c *Caged) ZeroCopyFd(w, h uint) (int, uint64, error) { return c.base.ZeroCopyFd(w, h) }
+
+// WaitZeroCopyBlit waits for the most recent async Vulkan zero-copy blit to
+// complete before the encoder reads from the exported buffer.
+func (c *Caged) WaitZeroCopyBlit() error { return c.base.WaitZeroCopyBlit() }

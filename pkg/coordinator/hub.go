@@ -69,6 +69,11 @@ func (h *Hub) handleUserConnection() http.HandlerFunc {
 			return
 		}
 
+		// Snapshot the active room ID now, before any concurrent goroutine
+		// (e.g. the worker's message loop) can clear it via HandleCloseRoom.
+		// Without this snapshot, InitSession reads worker.RoomId under a race.
+		activeRoomId := worker.RoomId
+
 		// Link the user to the selected worker. Slot reservation is handled later
 		// on game start; this keeps connections lightweight and lets deep-link
 		// joins share a worker without consuming its single game slot.
@@ -82,7 +87,7 @@ func (h *Hub) handleUserConnection() http.HandlerFunc {
 			list[i] = api.AppMeta{Alias: apps[i].Alias, Title: apps[i].Name, System: apps[i].System}
 		}
 
-		user.InitSession(worker.Id().String(), h.conf.Webrtc.IceServers, list)
+		user.InitSession(worker.Id().String(), h.conf.Webrtc.IceServers, list, activeRoomId)
 		log.Info().Str(logger.DirectionField, logger.MarkPlus).Msgf("user %s", user.Id())
 		<-done
 	}
@@ -141,14 +146,43 @@ func (h *Hub) handleWorkerConnection() http.HandlerFunc {
 		conn.SetMaxReadSize(h.conf.Coordinator.MaxWsSize)
 
 		worker := NewWorker(conn, *handshake, log)
-		defer h.workers.RemoveDisconnect(worker)
-		done := worker.HandleRequests(&h.users)
+		defer func() {
+			h.DetachWorkerUsers(worker.Id())
+			h.workers.RemoveDisconnect(worker)
+		}()
+		done := worker.HandleRequests(h)
 		h.workers.Add(worker)
 		log.Info().
 			Str(logger.DirectionField, logger.MarkPlus).
 			Msgf("worker %s", worker.PrintInfo())
 		<-done
 	}
+}
+
+func (h *Hub) Find(id string) *User {
+	return h.users.Find(id)
+}
+
+// NotifyWorkerUsers sends a packet to every user currently linked to the given worker.
+func (h *Hub) NotifyWorkerUsers(wid com.Uid, t api.PT, payload any) {
+	for u := range h.users.Values() {
+		if u.w != nil && u.w.Id() == wid {
+			u.Notify(t, payload)
+		}
+	}
+}
+
+func (h *Hub) DetachWorkerUsers(wid com.Uid) {
+	for u := range h.users.Values() {
+		if u.w != nil && u.w.Id() == wid {
+			u.w = nil
+			u.Notify(api.QuitGame, nil)
+		}
+	}
+}
+
+func (h *Hub) PickAvailableWorker() *Worker {
+	return h.find1stFreeWorker("")
 }
 
 func (h *Hub) GetServerList() (r []api.Server) {
@@ -200,22 +234,50 @@ func (h *Hub) findWorkerFor(usr *User, q url.Values, log *logger.Logger) *Worker
 		log.Debug().Str("room", roomId).Msg("An existing worker has been found")
 	} else if worker = h.findWorkerByPreviousRoom(sessionId); worker != nil {
 		log.Debug().Msgf("Worker %v with the previous room: %v is found", wid, roomId)
+	} else if roomIdRaw == "" {
+		// No room specified: prefer a fresh free worker first.
+		//
+		// This avoids routing plain visits onto a stale "active" room when a
+		// crashed/restarting worker briefly lingers in coordinator state. Users
+		// who explicitly intend to join an existing session should arrive with a
+		// room id / deep link instead.
+		if worker = h.find1stFreeWorker(zone); worker != nil {
+			log.Debug().Msg("Found next free worker")
+		} else if worker = h.find1stActiveWorker(zone); worker != nil {
+			log.Debug().Str("room", worker.RoomId).Msg("Found active shared room (no free worker available)")
+		}
 	} else {
-		switch h.conf.Coordinator.Selector {
-		case config.SelectByPing:
-			log.Debug().Msgf("Searching fastest free worker...")
-			if worker = h.findFastestWorker(zone,
-				func(servers []string) (map[string]int64, error) { return usr.CheckLatency(servers) }); worker != nil {
-				log.Debug().Msg("The fastest worker has been found")
-			}
-		default:
-			log.Debug().Msgf("Searching any free worker...")
-			if worker = h.find1stFreeWorker(zone); worker != nil {
-				log.Debug().Msgf("Found next free worker")
+		// Room ID was specified but no exact match found. Try to join an active
+		// shared session first (covers stale localStorage room IDs from prior
+		// sessions), then fall back to a free worker or ping-based selection.
+		if worker = h.find1stActiveWorker(zone); worker != nil {
+			log.Debug().Str("room", worker.RoomId).Msg("Joined active shared room (stale room_id fallback)")
+		} else {
+			switch h.conf.Coordinator.Selector {
+			case config.SelectByPing:
+				log.Debug().Msgf("Searching fastest free worker...")
+				if worker = h.findFastestWorker(zone,
+					func(servers []string) (map[string]int64, error) { return usr.CheckLatency(servers) }); worker != nil {
+					log.Debug().Msg("The fastest worker has been found")
+				}
+			default:
+				log.Debug().Msgf("Searching any free worker...")
+				if worker = h.find1stFreeWorker(zone); worker != nil {
+					log.Debug().Msgf("Found next free worker")
+				}
 			}
 		}
 	}
 	return worker
+}
+
+func (h *Hub) find1stActiveWorker(region string) *Worker {
+	for w := range h.workers.Values() {
+		if w.RoomId != "" && w.In(region) {
+			return w
+		}
+	}
+	return nil
 }
 
 func (h *Hub) findWorkerByPreviousRoom(id string) *Worker {

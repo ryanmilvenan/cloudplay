@@ -2,7 +2,6 @@ package graphics
 
 import (
 	"fmt"
-	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -88,8 +87,7 @@ func (s *SDL) Deinit() error {
 	return err
 }
 
-func (s *SDL) BindContext() error              { return s.w.GLMakeCurrent(s.ctx) }
-func GlProcAddress(proc string) unsafe.Pointer { return sdl.GLGetProcAddress(proc) }
+func (s *SDL) BindContext() error { return s.w.GLMakeCurrent(s.ctx) }
 
 func TryInit() error {
 	if err := sdl.Init(sdl.INIT_VIDEO); err != nil {

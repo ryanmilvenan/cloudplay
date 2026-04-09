@@ -22,9 +22,10 @@ type (
 		Credential string `json:"credential,omitempty"`
 	}
 	InitSessionUserResponse struct {
-		Ice   []IceServer `json:"ice"`
-		Games []AppMeta   `json:"games"`
-		Wid   string      `json:"wid"`
+		Ice    []IceServer `json:"ice"`
+		Games  []AppMeta   `json:"games"`
+		Wid    string      `json:"wid"`
+		RoomId string      `json:"roomId,omitempty"`
 	}
 	AppMeta struct {
 		Alias  string `json:"alias,omitempty"`

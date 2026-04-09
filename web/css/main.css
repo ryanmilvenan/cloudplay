@@ -82,7 +82,8 @@ html, body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: visible;
     position: relative;
 }
 
@@ -110,14 +111,59 @@ html, body {
 
 #game-list-container {
     width: 100%;
-    max-width: 600px;
+    max-width: 760px;
     flex: 1;
-    overflow-y: auto;
+    overflow-y: scroll;
     overflow-x: hidden;
-    padding: 0 0 40px;
+    padding: 0 16px 40px;
+    box-sizing: border-box;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: thin;
     scrollbar-color: rgba(255,255,255,0.1) transparent;
+    /* Ensure container fills available space and scrolls */
+    min-height: 0;
+    -webkit-user-select: none;
+    user-select: none;
+    /* Allow touch scrolling even when touching clickable items */
+    touch-action: pan-y;
+}
+
+.game-system-card {
+    margin: 0 0 18px;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    background: rgba(255,255,255,0.03);
+    overflow: hidden;
+}
+
+.game-system-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 18px;
+    background: rgba(255,255,255,0.04);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.game-system-card__title {
+    font-family: '6809', monospace;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.78);
+}
+
+.game-system-card__count {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(255,255,255,0.35);
+}
+
+.game-system-card__list {
+    display: flex;
+    flex-direction: column;
 }
 
 #game-list-container::-webkit-scrollbar {
@@ -132,11 +178,15 @@ html, body {
 }
 
 .game-list-item {
-    padding: 18px 28px;
+    padding: 18px 20px;
     border-bottom: 1px solid rgba(255,255,255,0.05);
     cursor: pointer;
     transition: background 0.1s;
     -webkit-tap-highlight-color: transparent;
+}
+
+.game-system-card__list .game-list-item:last-child {
+    border-bottom: none;
 }
 
 .game-list-item:active,
@@ -147,6 +197,7 @@ html, body {
 .game-list-item.selected {
     background: rgba(255,255,255,0.08);
     border-left: 3px solid rgba(255,255,255,0.4);
+    padding-left: 17px;
 }
 
 .game-list-item__title {
@@ -166,6 +217,24 @@ html, body {
     margin-top: 4px;
     text-transform: uppercase;
     letter-spacing: 1px;
+}
+
+@media (max-width: 640px) {
+    #game-list-container {
+        padding: 0 10px 28px;
+    }
+
+    .game-system-card__header {
+        padding: 12px 14px;
+    }
+
+    .game-list-item {
+        padding: 16px 16px;
+    }
+
+    .game-list-item.selected {
+        padding-left: 13px;
+    }
 }
 
 /* ── Toast notifications ── */

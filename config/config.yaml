@@ -1,0 +1,319 @@
+version: 3
+library:
+  aliasFile: alias.txt
+  basePath: assets/games
+  ignored:
+  - neogeo
+  - pgm
+  - .pure
+  supported: null
+  verbose: true
+  watchMode: false
+coordinator:
+  debug: false
+  selector: null
+  monitoring:
+    port: 6601
+    profilingEnabled: false
+    metricEnabled: false
+    urlPrefix: /coordinator
+  origin:
+    userWs: null
+    workerWs: null
+  maxWsSize: 32000000
+  server:
+    address: :8000
+    cacheControl: max-age=259200, must-revalidate
+    frameOptions: ''
+    https: false
+    tls:
+      address: :443
+      domain: null
+      httpsCert: null
+      httpsKey: null
+  analytics:
+    inject: false
+    gtag: null
+worker:
+  debug: false
+  library:
+    basePath: assets/games
+  network:
+    coordinatorAddress: localhost:8000
+    endpoint: /wso
+    pingEndpoint: /echo
+    publicAddress: null
+    secure: false
+    zone: null
+  monitoring:
+    port: 6602
+    profilingEnabled: false
+    metricEnabled: false
+    urlPrefix: /worker
+  server:
+    address: :9000
+    https: false
+    tls:
+      address: :444
+      domain: null
+      httpsCert: null
+      httpsKey: null
+  tag: null
+emulator:
+  threads: 0
+  autosaveSec: 15
+  storage: '{user}/.cr/save'
+  localPath: ./libretro
+  failFast: true
+  skipLateFrames: false
+  logDroppedFrames: false
+  libretro:
+    saveCompression: true
+    debounceMs: 0
+    dup: true
+    logLevel: 1
+    cores:
+      paths:
+        libs: assets/cores
+      repo:
+        sync: true
+        extLock: '{user}/.cr/cloud-game.lock'
+        map:
+          darwin:
+            amd64:
+              arch: x86_64
+              ext: .dylib
+              os: osx
+              vendor: apple
+            arm64:
+              arch: arm64
+              ext: .dylib
+              os: osx
+              vendor: apple
+          linux:
+            amd64:
+              arch: x86_64
+              ext: .so
+              os: linux
+            arm:
+              arch: armv7-neon-hf
+              ext: .so
+              os: linux
+          windows:
+            amd64:
+              arch: x86_64
+              ext: .dll
+              os: windows
+        main:
+          type: buildbot
+          url: https://buildbot.libretro.com/nightly
+          compression: zip
+        secondary:
+          type: github
+          url: https://github.com/sergystepanov/libretro-spiegel/raw/main
+          compression: zip
+      list:
+        gba:
+          lib: mgba_libretro
+          roms:
+          - gba
+          - gbc
+          options:
+            mgba_audio_low_pass_filter: disabled
+            mgba_audio_low_pass_range: 50
+        gc:
+          lib: dolphin_libretro
+          roms:
+          - iso
+          - nkit.iso
+          - gcm
+          - gcz
+          - rvz
+          isGlAllowed: true
+          usesLibCo: true
+          vfr: true
+          options:
+            dolphin_cpu_core: 5
+            dolphin_fastmem: disabled
+            dolphin_fastmem_arena: disabled
+            dolphin_main_cpu_thread: enabled
+            dolphin_renderer: Hardware
+            dolphin_shader_compilation_mode: 0
+            dolphin_wait_for_shaders: disabled
+        wii:
+          lib: dolphin_libretro
+          folder: wii
+          roms:
+          - wbfs
+          - ciso
+          - wad
+          - wia
+          - rvz
+          - iso
+          - m3u
+          isGlAllowed: true
+          usesLibCo: true
+          vfr: true
+          options:
+            dolphin_cpu_core: 5
+            dolphin_fastmem: disabled
+            dolphin_fastmem_arena: disabled
+            dolphin_main_cpu_thread: disabled
+            dolphin_renderer: Hardware
+            dolphin_shader_compilation_mode: 0
+            dolphin_wait_for_shaders: disabled
+        dreamcast:
+          lib: flycast_libretro
+          folder: dreamcast
+          roms:
+          - chd
+          - gdi
+          - cdi
+          - cue
+          isGlAllowed: true
+          usesLibCo: true
+          vfr: true
+          hid:
+            0: [1]
+            1: [1]
+            2: [1]
+            3: [1]
+        ps2:
+          lib: pcsx2_libretro
+          folder: ps2
+          roms:
+          - iso
+          - chd
+          - cso
+          - cue
+          - bin
+          - gz
+          isGlAllowed: true
+          usesLibCo: true
+          vfr: true
+          options:
+            pcsx2_bios: SCPH-70012_BIOS_V12_USA_200.bin
+            pcsx2_renderer: Software
+            pcsx2_multitap1: enabled
+            pcsx2_multitap2: enabled
+        pcsx:
+          lib: pcsx_rearmed_libretro
+          roms:
+          - cue
+          - chd
+          folder: psx
+          options:
+            pcsx_rearmed_show_bios_bootlogo: enabled
+            pcsx_rearmed_drc: enabled
+            pcsx_rearmed_display_internal_fps: disabled
+        mame:
+          lib: fbneo_libretro
+          folder: mame
+          roms:
+          - zip
+        nes:
+          lib: nestopia_libretro
+          roms:
+          - nes
+          options:
+            nestopia_aspect: uncorrected
+        snes:
+          lib: snes9x_libretro
+          roms:
+          - smc
+          - sfc
+          - swc
+          - fig
+          - bs
+          hid:
+            1: 257
+        n64:
+          lib: mupen64plus_next_libretro
+          roms:
+          - n64
+          - v64
+          - z64
+          isGlAllowed: false
+          usesLibCo: true
+          vfr: true
+          options:
+            mupen64plus-rdp-plugin: angrylion
+            mupen64plus-rsp-plugin: cxd4
+            mupen64plus-cpucore: dynamic_recompiler
+            mupen64plus-pak1: memory
+            mupen64plus-astick-sensitivity: '100'
+        dos:
+          lib: dosbox_pure_libretro
+          roms:
+          - zip
+          - cue
+          folder: dos
+          kbMouseSupport: true
+          nonBlockingSave: true
+          saveStateFs: '*.pure.zip'
+          hid:
+            0:
+            - 257
+            - 513
+            1:
+            - 257
+            - 513
+            2:
+            - 257
+            - 513
+            3:
+            - 257
+            - 513
+          options:
+            dosbox_pure_conf: outside
+            dosbox_pure_force60fps: 'true'
+encoder:
+  audio:
+    frame: 10
+    frames:
+    - 20
+    - 10
+    resampler: 1
+  video:
+    codec: h264
+    threads: 0
+    h264:
+      mode: crf
+      crf: 23
+      maxRate: 0
+      bufSize: 0
+      preset: superfast
+      profile: baseline
+      tune: zerolatency
+      logLevel: 0
+    vpx:
+      bitrate: 1200
+      keyframeInterval: 5
+    nvenc:
+      bitrate: 15000
+      preset: p5
+      tune: ull
+    zeroCopy: true
+recording:
+  enabled: false
+  name: '%date:20060102150405%_%rand:3%_%user%_%game%'
+  zip: true
+  folder: ./recording
+storage:
+  provider: null
+  s3Endpoint: null
+  s3BucketName: null
+  s3AccessKeyId: null
+  s3SecretAccessKey: null
+webrtc:
+  disableDefaultInterceptors: false
+  dtlsRole: null
+  iceServers:
+  - urls: stun:stun.l.google.com:19302
+  iceLite: false
+  icePorts:
+    min: null
+    max: null
+  singlePort: null
+  iceIpMap: null
+  logLevel: 6

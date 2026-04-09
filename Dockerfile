@@ -27,7 +27,7 @@ WORKDIR ${BUILD_PATH}
 
 # by default we ignore all except some folders and files, see .dockerignore
 COPY . ./
-RUN --mount=type=cache,target=/root/.cache/go-build make build.coordinator
+RUN make build.coordinator
 RUN find ./bin/* | xargs upx --best --lzma
 
 WORKDIR /usr/local/share/cloud-game
@@ -58,14 +58,17 @@ RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
     libavcodec-dev \
     libavutil-dev \
     libvulkan-dev \
+    libegl-dev \
+    libx11-dev \
     nvidia-cuda-toolkit \
     pkg-config \
 && rm -rf /var/lib/apt/lists/*
 
 # by default we ignore all except some folders and files, see .dockerignore
 COPY . ./
-RUN --mount=type=cache,target=/root/.cache/go-build make GO_TAGS=static,st,vulkan,nvenc build.worker
-RUN find ./bin/* | xargs upx --best --lzma
+RUN make GO_TAGS=static,st,vulkan,nvenc build.worker
+# UPX disabled for worker — causes CGo unsafe.Pointer corruption with Go 1.21+
+# RUN find ./bin/* | xargs upx --best --lzma
 
 WORKDIR /usr/local/share/cloud-game
 RUN mv ${BUILD_PATH}/bin/* ./ && \
@@ -84,6 +87,7 @@ RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
     curl \
     ffmpeg \
     libcudart12 \
+    libegl1 \
     libvulkan1 \
     libx11-6 \
     libxext6 \

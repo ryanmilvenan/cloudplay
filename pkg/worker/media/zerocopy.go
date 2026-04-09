@@ -28,11 +28,15 @@ package media
 
 import (
 	"fmt"
+	"log"
+	"sync/atomic"
 
 	"github.com/giongto35/cloud-game/v3/pkg/config"
 	"github.com/giongto35/cloud-game/v3/pkg/encoder/nvenc"
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 )
+
+var zcDiagFrame int64
 
 // TryArmZeroCopy attempts to enable the Phase 3c zero-copy encode path on pipe.
 //
@@ -53,7 +57,8 @@ func TryArmZeroCopy(
 	pipe *WebrtcMediaPipe,
 	vc config.Video,
 	w, h uint,
-	zeroCopyFd func(w, h uint) (int, error),
+	zeroCopyFd func(w, h uint) (int, uint64, error),
+	waitBlit func() error,
 	log *logger.Logger,
 ) bool {
 	if !vc.ZeroCopy {
@@ -65,9 +70,10 @@ func TryArmZeroCopy(
 	}
 
 	opts := &nvenc.Options{
-		Bitrate: vc.Nvenc.Bitrate,
-		Preset:  vc.Nvenc.Preset,
-		Tune:    vc.Nvenc.Tune,
+		Bitrate:  vc.Nvenc.Bitrate,
+		Preset:   vc.Nvenc.Preset,
+		Tune:     vc.Nvenc.Tune,
+		ZeroCopy: true,
 	}
 	enc, err := nvenc.NewEncoder(int(w), int(h), opts)
 	if err != nil {
@@ -75,19 +81,20 @@ func TryArmZeroCopy(
 		return false
 	}
 
-	bufSize := uint64(w * h * 4) // RGBA8
+	frameSize := uint64(w * h * 4) // visible RGBA8 bytes
 
 	lazy := &lazyZeroCopyNVENC{
-		enc:     enc,
-		bufSize: bufSize,
-		getFd:   zeroCopyFd,
-		w:       w,
-		h:       h,
-		log:     log,
+		enc:       enc,
+		frameSize: frameSize,
+		getFd:     zeroCopyFd,
+		waitBlit:  waitBlit,
+		w:         w,
+		h:         h,
+		log:       log,
 	}
 
 	pipe.SetZeroCopyEncoder(lazy)
-	log.Info().Msgf("media/zerocopy: Phase 3c zero-copy armed (%dx%d, bufSize=%d) — GPU RGBA→NV12 via PTX kernel", w, h, bufSize)
+	log.Info().Msgf("media/zerocopy: Phase 3c zero-copy armed (%dx%d, bufSize=%d) — GPU RGBA→NV12 via PTX kernel", w, h, frameSize)
 	return true
 }
 
@@ -96,13 +103,15 @@ func TryArmZeroCopy(
 //
 // On cleanup, ReleaseOnDestroy must be called to free the CUDA handle.
 type lazyZeroCopyNVENC struct {
-	enc     *nvenc.NVENC
-	bufSize uint64
-	devPtr  uintptr // 0 until first successful import
-	extMem  *nvenc.ExtMemHandle // non-nil after first successful CUDA import
-	getFd   func(w, h uint) (int, error)
-	w, h    uint
-	log     *logger.Logger
+	enc        *nvenc.NVENC
+	frameSize  uint64
+	importSize uint64
+	devPtr     uintptr // 0 until first successful import
+	extMem     *nvenc.ExtMemHandle // non-nil after first successful CUDA import
+	getFd      func(w, h uint) (int, uint64, error)
+	waitBlit   func() error // waits for async BlitFrom to complete; may be nil
+	w, h       uint
+	log        *logger.Logger
 }
 
 // EncodeFromDevPtr is the hot path: called every frame for zero-copy encode.
@@ -117,22 +126,41 @@ type lazyZeroCopyNVENC struct {
 func (lz *lazyZeroCopyNVENC) EncodeFromDevPtr(_ uintptr, _ uint64) ([]byte, error) {
 	// Import fd on first frame if not yet done.
 	if lz.devPtr == 0 {
-		fd, err := lz.getFd(lz.w, lz.h)
+		fd, importSize, err := lz.getFd(lz.w, lz.h)
 		if err != nil {
 			return nil, fmt.Errorf("zerocopy: Vulkan fd error: %w", err)
 		}
 		if fd < 0 {
 			return nil, fmt.Errorf("zerocopy: Vulkan fd not ready yet (fd=%d)", fd)
 		}
-		devPtr, extMem, err := nvenc.ImportExternalMemory(fd, lz.bufSize)
+		if importSize == 0 {
+			return nil, fmt.Errorf("zerocopy: Vulkan export size invalid (fd=%d, size=%d)", fd, importSize)
+		}
+		log.Printf("[cloudplay diag] zerocopy: attempting CUDA import fd=%d importSize=%d", fd, importSize)
+		devPtr, extMem, err := nvenc.ImportExternalMemory(lz.enc, fd, importSize)
 		if err != nil {
 			return nil, fmt.Errorf("zerocopy: CUDA import failed: %w", err)
 		}
 		lz.devPtr = devPtr
 		lz.extMem = extMem
-		lz.log.Info().Msgf("media/zerocopy: CUDA external memory imported (fd=%d, devPtr=0x%x)", fd, devPtr)
+		lz.importSize = importSize
+		log.Printf("[cloudplay diag] zerocopy: CUDA import SUCCESS devPtr=0x%x importSize=%d frameSize=%d", devPtr, importSize, lz.frameSize)
+		lz.log.Info().Msgf("media/zerocopy: CUDA external memory imported (fd=%d, importSize=%d, devPtr=0x%x)", fd, importSize, devPtr)
 	}
-	return lz.enc.EncodeFromDevPtr(lz.devPtr, lz.bufSize)
+	// Wait for the async blit to complete before reading the GPU buffer.
+	if lz.waitBlit != nil {
+		if err := lz.waitBlit(); err != nil {
+			return nil, fmt.Errorf("zerocopy: WaitBlit failed: %w", err)
+		}
+	}
+	out, err := lz.enc.EncodeFromDevPtr(lz.devPtr, lz.frameSize)
+	if err == nil && len(out) == 0 {
+		n := atomic.AddInt64(&zcDiagFrame, 1)
+		if n <= 5 || n%300 == 0 {
+			log.Printf("[cloudplay diag] zerocopy: EncodeFromDevPtr returned nil output (no error), devPtr=0x%x frameSize=%d call=%d", lz.devPtr, lz.frameSize, n)
+		}
+	}
+	return out, err
 }
 
 // Destroy releases the CUDA external-memory handle and shuts down the encoder.

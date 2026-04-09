@@ -2,14 +2,18 @@ package webrtc
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
+
+var webrtcDiagFrame int64
 
 type Peer struct {
 	api       *ApiFactory
@@ -114,6 +118,12 @@ func (p *Peer) SendAudio(dat []byte, dur int32) {
 }
 
 func (p *Peer) SendVideo(data []byte, dur int32) {
+	// DIAG: log data length every 60 frames
+	n := atomic.AddInt64(&webrtcDiagFrame, 1)
+	if n%60 == 1 {
+		log.Printf("[cloudplay diag] SendVideo frame=%d data_len=%d dur=%d", n, len(data), dur)
+	}
+
 	if err := p.send(data, int64(dur), p.v.WriteSample); err != nil {
 		p.log.Error().Err(err).Send()
 	}

@@ -18,11 +18,15 @@ func (u *User) CheckLatency(req api.CheckLatencyUserResponse) (api.CheckLatencyU
 }
 
 // InitSession signals the user that the app is ready to go.
-func (u *User) InitSession(wid string, ice []config.IceServer, games []api.AppMeta) {
+// roomId is the active room at the time the worker was selected; it is
+// passed explicitly to avoid a data race with the worker's message loop
+// which can clear worker.RoomId via HandleCloseRoom at any time.
+func (u *User) InitSession(wid string, ice []config.IceServer, games []api.AppMeta, roomId string) {
 	u.Notify(api.InitSession, api.InitSessionUserResponse{
-		Ice:   *(*[]api.IceServer)(unsafe.Pointer(&ice)), // don't do this at home
-		Games: games,
-		Wid:   wid,
+		Ice:    *(*[]api.IceServer)(unsafe.Pointer(&ice)), // don't do this at home
+		Games:  games,
+		Wid:    wid,
+		RoomId: roomId,
 	})
 }
 

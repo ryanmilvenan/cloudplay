@@ -42,12 +42,6 @@ const audioHz = 48000
 
 type samples []int16
 
-// audioPacket holds one Opus-encoded frame for the smoothing buffer.
-type audioPacket struct {
-	data []byte
-	ms   float32
-}
-
 var (
 	encoderOnce = sync.Once{}
 	opusCoder   *opus.Encoder
@@ -99,13 +93,6 @@ type WebrtcMediaPipe struct {
 	zcMu            sync.RWMutex
 	zcEnc           ZeroCopyVideoEncoder
 	zeroCopyEnabled bool // mirrors config.Video.ZeroCopy
-
-	// Audio smoothing: decouple encoded audio delivery from video frame timing.
-	// encodeAudio pushes packets into smoothCh; a goroutine drains them on a
-	// steady 10ms ticker so WebRTC sees regular packet spacing regardless of
-	// how bursty retro_run frame timing is.
-	smoothCh   chan audioPacket
-	smoothDone chan struct{}
 }
 
 func NewWebRtcMediaPipe(ac config.Audio, vc config.Video, log *logger.Logger) *WebrtcMediaPipe {
@@ -118,12 +105,6 @@ func (wmp *WebrtcMediaPipe) SetAudioCb(cb func([]byte, int32)) {
 	}
 }
 func (wmp *WebrtcMediaPipe) Destroy() {
-	// Stop audio smoothing goroutine.
-	if wmp.smoothDone != nil {
-		close(wmp.smoothDone)
-		wmp.smoothDone = nil
-	}
-
 	// Release the zero-copy CUDA handles before the video encoder is torn down.
 	wmp.zcMu.Lock()
 	zc := wmp.zcEnc
@@ -160,16 +141,6 @@ func (wmp *WebrtcMediaPipe) Init() error {
 
 	wmp.log.Debug().Msgf("%v", v.Info())
 	wmp.initialized = true
-
-	// Start audio smoothing goroutine.
-	// Buffer holds up to 500ms of encoded Opus packets (~50 × 10ms frames).
-	// The goroutine drains them on a steady 10ms ticker, smoothing out the
-	// bursty delivery pattern caused by audio being emitted synchronously
-	// with retro_run (which paces at video framerate, not audio rate).
-	wmp.smoothCh = make(chan audioPacket, 50)
-	wmp.smoothDone = make(chan struct{})
-	go wmp.audioSmoothLoop()
-
 	return nil
 }
 
@@ -198,22 +169,6 @@ func (wmp *WebrtcMediaPipe) encodeAudio(pcm samples, ms float32) {
 	data, err := wmp.Audio().Encode(pcm)
 	if err != nil {
 		wmp.log.Error().Err(err).Msgf("opus encode fail")
-		return
-	}
-	if wmp.smoothCh != nil {
-		// Copy data — the opus encoder reuses its output buffer.
-		out := make([]byte, len(data))
-		copy(out, data)
-		select {
-		case wmp.smoothCh <- audioPacket{data: out, ms: ms}:
-		default:
-			// Channel full — drop oldest, push new (avoid unbounded growth).
-			select {
-			case <-wmp.smoothCh:
-			default:
-			}
-			wmp.smoothCh <- audioPacket{data: out, ms: ms}
-		}
 		return
 	}
 	wmp.onAudio(data, ms)
@@ -338,52 +293,6 @@ func (wmp *WebrtcMediaPipe) ProcessVideoZeroCopy() []byte {
 		log.Printf("[cloudplay diag] ProcessVideoZeroCopy frame=%d output_len=%d", n, len(out))
 	}
 	return out
-}
-
-// audioSmoothLoop drains encoded Opus packets from smoothCh on a steady
-// 10ms ticker, decoupling audio delivery timing from video frame pacing.
-//
-// When the emulator runs at irregular frame rates (e.g. 43fps instead of 60),
-// audio packets arrive in bursts tied to retro_run.  This goroutine re-paces
-// them so WebRTC sees steady ~10ms packet spacing, which eliminates the
-// jitter buffer concealment caused by bursty arrival.
-//
-// Adaptive drain: if the buffer grows beyond 30 packets (~300ms), drain up
-// to 3 per tick to catch up without a hard skip.
-func (wmp *WebrtcMediaPipe) audioSmoothLoop() {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-wmp.smoothDone:
-			// Drain remaining packets before exit.
-			for {
-				select {
-				case pkt := <-wmp.smoothCh:
-					wmp.onAudio(pkt.data, pkt.ms)
-				default:
-					return
-				}
-			}
-		case <-ticker.C:
-			// Drain one packet per tick normally.
-			select {
-			case pkt := <-wmp.smoothCh:
-				wmp.onAudio(pkt.data, pkt.ms)
-			default:
-				continue
-			}
-			// Adaptive catch-up: if buffer is backing up, drain extra packets.
-			for i := 0; i < 2 && len(wmp.smoothCh) > 30; i++ {
-				select {
-				case pkt := <-wmp.smoothCh:
-					wmp.onAudio(pkt.data, pkt.ms)
-				default:
-				}
-			}
-		}
-	}
 }
 
 func (wmp *WebrtcMediaPipe) Reinit() error {

@@ -70,10 +70,12 @@ func TryArmZeroCopy(
 	}
 
 	opts := &nvenc.Options{
-		Bitrate:  vc.Nvenc.Bitrate,
-		Preset:   vc.Nvenc.Preset,
-		Tune:     vc.Nvenc.Tune,
-		ZeroCopy: true,
+		Bitrate:          vc.Nvenc.Bitrate,
+		Preset:           vc.Nvenc.Preset,
+		Tune:             vc.Nvenc.Tune,
+		Profile:          vc.Nvenc.Profile,
+		KeyframeInterval: vc.Nvenc.KeyframeInterval,
+		ZeroCopy:         true,
 	}
 	enc, err := nvenc.NewEncoder(int(w), int(h), opts)
 	if err != nil {

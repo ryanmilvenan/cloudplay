@@ -2,7 +2,6 @@ package encoder
 
 import (
 	"fmt"
-	"log"
 	"sync/atomic"
 
 	"github.com/giongto35/cloud-game/v3/pkg/config"
@@ -12,8 +11,6 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/encoder/yuv"
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 )
-
-var encoderDiagFrame int64
 
 type (
 	InFrame  yuv.RawFrame
@@ -61,9 +58,11 @@ func NewVideoEncoder(w, h, dw, dh int, scale float64, conf config.Video, log *lo
 		enc, err = h264.NewEncoder(dw, dh, conf.Threads, &opts)
 	case H264NVENC:
 		opts := nvenc.Options{
-			Bitrate: conf.Nvenc.Bitrate,
-			Preset:  conf.Nvenc.Preset,
-			Tune:    conf.Nvenc.Tune,
+			Bitrate:          conf.Nvenc.Bitrate,
+			Preset:           conf.Nvenc.Preset,
+			Tune:             conf.Nvenc.Tune,
+			Profile:          conf.Nvenc.Profile,
+			KeyframeInterval: conf.Nvenc.KeyframeInterval,
 		}
 		enc, err = nvenc.NewEncoder(dw, dh, &opts)
 	case VP8, VP9, VPX:
@@ -93,32 +92,8 @@ func (v *Video) Encode(frame InFrame) OutFrame {
 
 	yCbCr := v.y.Process(yuv.RawFrame(frame), v.rot, v.pf)
 	//defer v.y.Put(&yCbCr)
-
-	// DIAG: log codec identity, YUV conversion, and check if input is all-black
-	n := atomic.AddInt64(&encoderDiagFrame, 1)
-	if n%60 == 1 {
-		nonZero := 0
-		for i := 0; i < len(frame.Data) && i < 1000; i++ {
-			if frame.Data[i] != 0 { nonZero++; break }
-		}
-		yuvNonZero := 0
-		for i := 0; i < len(yCbCr) && i < 1000; i++ {
-			if yCbCr[i] != 0 { yuvNonZero++; break }
-		}
-		log.Printf("[cloudplay diag] Video.Encode frame=%d codec=%T yuv_len=%d input_data_len=%d pf=%d rot=%d inputHasData=%v yuvHasData=%v first8input=%v first8yuv=%v",
-			n, v.codec, len(yCbCr), len(frame.Data), v.pf, v.rot, nonZero > 0, yuvNonZero > 0,
-			frame.Data[:min(8, len(frame.Data))], yCbCr[:min(8, len(yCbCr))])
-	}
-
 	if bytes := v.codec.Encode(yCbCr); len(bytes) > 0 {
-		if n%60 == 1 {
-			log.Printf("[cloudplay diag] Video.Encode frame=%d codec returned %d bytes", n, len(bytes))
-		}
 		return bytes
-	}
-
-	if n%60 == 1 {
-		log.Printf("[cloudplay diag] Video.Encode frame=%d codec returned nil/empty", n)
 	}
 	return nil
 }
@@ -161,6 +136,13 @@ func (v *Video) SetFlip(b bool) {
 		return
 	}
 	v.codec.SetFlip(b)
+}
+
+func (v *Video) IntraRefresh() {
+	if v == nil {
+		return
+	}
+	v.codec.IntraRefresh()
 }
 
 func (v *Video) Stop() {

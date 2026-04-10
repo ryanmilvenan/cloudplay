@@ -8,7 +8,7 @@ library:
   - .pure
   supported: null
   verbose: true
-  watchMode: false
+  watchMode: true
 coordinator:
   debug: false
   selector: null
@@ -123,6 +123,7 @@ emulator:
             mgba_audio_low_pass_range: 50
         gc:
           lib: dolphin_libretro
+          pacerFps: 60
           roms:
           - iso
           - nkit.iso
@@ -291,8 +292,10 @@ encoder:
       keyframeInterval: 5
     nvenc:
       bitrate: 15000
-      preset: p5
-      tune: ull
+      preset: p6
+      tune: ll
+      profile: baseline
+      keyframeInterval: 60
     zeroCopy: true
 recording:
   enabled: false

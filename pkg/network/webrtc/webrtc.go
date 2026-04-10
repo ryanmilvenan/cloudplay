@@ -2,24 +2,22 @@ package webrtc
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
-
-var webrtcDiagFrame int64
 
 type Peer struct {
 	api       *ApiFactory
 	conn      *webrtc.PeerConnection
 	log       *logger.Logger
 	OnMessage func(data []byte)
+	OnPLI     func() // called when the receiver requests a keyframe (PLI/FIR)
 
 	a *webrtc.TrackLocalStaticSample
 	v *webrtc.TrackLocalStaticSample
@@ -50,13 +48,31 @@ func (p *Peer) NewCall(vCodec, aCodec string, onICECandidate func(ice any)) (sdp
 	if err != nil {
 		return "", err
 	}
-	// Read incoming RTCP packets
+	// Read incoming RTCP packets — handle PLI/FIR to trigger IDR frames
 	go func() {
 		rtcpBuf := make([]byte, 1500)
 		for {
-			_, _, rtcpErr := vs.Read(rtcpBuf)
+			n, _, rtcpErr := vs.Read(rtcpBuf)
 			if rtcpErr != nil {
 				return
+			}
+			pkts, parseErr := rtcp.Unmarshal(rtcpBuf[:n])
+			if parseErr != nil {
+				continue
+			}
+			for _, pkt := range pkts {
+				switch pkt.(type) {
+				case *rtcp.PictureLossIndication:
+					p.log.Info().Msg("RTCP: PLI received — requesting IDR")
+					if p.OnPLI != nil {
+						p.OnPLI()
+					}
+				case *rtcp.FullIntraRequest:
+					p.log.Info().Msg("RTCP: FIR received — requesting IDR")
+					if p.OnPLI != nil {
+						p.OnPLI()
+					}
+				}
 			}
 		}
 	}()
@@ -118,12 +134,6 @@ func (p *Peer) SendAudio(dat []byte, dur int32) {
 }
 
 func (p *Peer) SendVideo(data []byte, dur int32) {
-	// DIAG: log data length every 60 frames
-	n := atomic.AddInt64(&webrtcDiagFrame, 1)
-	if n%60 == 1 {
-		log.Printf("[cloudplay diag] SendVideo frame=%d data_len=%d dur=%d", n, len(data), dur)
-	}
-
 	if err := p.send(data, int64(dur), p.v.WriteSample); err != nil {
 		p.log.Error().Err(err).Send()
 	}
@@ -160,7 +170,7 @@ func (p *Peer) SetRemoteSDP(sdp string, decoder Decoder) error {
 }
 
 func newTrack(id string, label string, codec string) (*webrtc.TrackLocalStaticSample, error) {
-	codec = normalizeCodec(codec)
+	codec = strings.ToLower(codec)
 	var mime string
 	switch id {
 	case "audio":
@@ -170,7 +180,7 @@ func newTrack(id string, label string, codec string) (*webrtc.TrackLocalStaticSa
 		}
 	case "video":
 		switch codec {
-		case "h264":
+		case "h264", "h264_nvenc":
 			mime = webrtc.MimeTypeH264
 		case "vpx", "vp8":
 			mime = webrtc.MimeTypeVP8
@@ -182,17 +192,6 @@ func newTrack(id string, label string, codec string) (*webrtc.TrackLocalStaticSa
 		return nil, fmt.Errorf("unsupported codec %s:%s", id, codec)
 	}
 	return webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: mime}, id, label)
-}
-
-func normalizeCodec(codec string) string {
-	codec = strings.ToLower(strings.TrimSpace(codec))
-
-	switch codec {
-	case "h264_nvenc":
-		return "h264"
-	default:
-		return codec
-	}
 }
 
 func (p *Peer) handleICECandidate(callback func(any)) func(*webrtc.ICECandidate) {

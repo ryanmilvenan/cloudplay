@@ -88,6 +88,7 @@ type LibretroCoreConfig struct {
 	Scale           float64
 	UniqueSaveDir   bool
 	UsesLibCo       bool
+	PacerFps        int    `yaml:"pacerFps"`
 	VFR             bool
 	Width           int
 }

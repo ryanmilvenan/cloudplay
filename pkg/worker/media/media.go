@@ -316,6 +316,18 @@ func (wmp *WebrtcMediaPipe) SetPixFmt(f uint32)  { wmp.oldPf = f; wmp.v.SetPixFo
 func (wmp *WebrtcMediaPipe) SetVideoFlip(b bool) { wmp.oldFlip = b; wmp.v.SetFlip(b) }
 func (wmp *WebrtcMediaPipe) SetRot(r uint)       { wmp.oldRot = r; wmp.v.SetRot(r) }
 
+func (wmp *WebrtcMediaPipe) IntraRefresh() {
+	wmp.zcMu.RLock()
+	zcEnc := wmp.zcEnc
+	wmp.zcMu.RUnlock()
+	if lz, ok := zcEnc.(*lazyZeroCopyNVENC); ok && lz != nil && lz.enc != nil {
+		lz.enc.IntraRefresh()
+	}
+	v := wmp.Video()
+	if v != nil {
+		v.IntraRefresh()
+	}
+}
 func (wmp *WebrtcMediaPipe) Video() *encoder.Video {
 	wmp.muv.RLock()
 	defer wmp.muv.RUnlock()

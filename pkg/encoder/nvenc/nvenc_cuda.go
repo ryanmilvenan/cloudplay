@@ -330,6 +330,7 @@ static int cuda_color_init(int width, int height) {
         cuDriverGetVersion(&driver_ver);
         fprintf(stderr, "[cloudplay diag] cuda_color_init: cuCtxGetCurrent=%d cur_ctx=%p driver_ver=%d dims=%dx%d\n",
                 (int)ctx_res, (void*)cur_ctx, driver_ver, width, height);
+                fflush(stderr);
     }
     // Try a trivial PTX module first to test if cuModuleLoadData works at all
     {
@@ -337,7 +338,9 @@ static int cuda_color_init(int width, int height) {
         CUmodule test_mod = NULL;
         CUresult test_res = cuModuleLoadData(&test_mod, TRIVIAL_PTX);
         fprintf(stderr, "[cloudplay diag] cuda_color_init: trivial PTX test CUresult=%d\n", (int)test_res);
+        fflush(stderr);
         if (test_mod) cuModuleUnload(test_mod);
+        fflush(stderr);
     }
     // JIT-compile the Y-plane PTX module with error log.
     {
@@ -347,12 +350,14 @@ static int cuda_color_init(int width, int height) {
         res = cuModuleLoadDataEx(&g_color_ctx.mod_y, RGBA_TO_NV12_Y_PTX, 2, jit_opts, jit_vals);
         if (res != CUDA_SUCCESS) {
             fprintf(stderr, "[cloudplay diag] cuda_color_init: cuModuleLoadDataEx(Y) failed: CUresult=%d jit_log='%s'\n", (int)res, jit_log);
+            fflush(stderr);
             goto fail;
         }
     }
     res = cuModuleGetFunction(&g_color_ctx.fn_y, g_color_ctx.mod_y, "rgba_to_nv12_y");
     if (res != CUDA_SUCCESS) {
         fprintf(stderr, "[cloudplay diag] cuda_color_init: cuModuleGetFunction(Y) failed: CUresult=%d\n", (int)res);
+        fflush(stderr);
         goto fail;
     }
 
@@ -360,11 +365,13 @@ static int cuda_color_init(int width, int height) {
     res = cuModuleLoadData(&g_color_ctx.mod_uv, RGBA_TO_NV12_UV_PTX);
     if (res != CUDA_SUCCESS) {
         fprintf(stderr, "[cloudplay diag] cuda_color_init: cuModuleLoadData(UV) failed: CUresult=%d\n", (int)res);
+        fflush(stderr);
         goto fail;
     }
     res = cuModuleGetFunction(&g_color_ctx.fn_uv, g_color_ctx.mod_uv, "rgba_to_nv12_uv");
     if (res != CUDA_SUCCESS) {
         fprintf(stderr, "[cloudplay diag] cuda_color_init: cuModuleGetFunction(UV) failed: CUresult=%d\n", (int)res);
+        fflush(stderr);
         goto fail;
     }
 
@@ -382,10 +389,15 @@ static int cuda_color_init(int width, int height) {
     g_color_ctx.height      = height;
     g_color_ctx.ptx_ok      = 1;
     g_color_ctx.initialised = 1;
+    fprintf(stderr, "[cloudplay diag] cuda_color_init: SUCCESS\n"); fflush(stderr);
+    fflush(stderr);
     return 1;
 
 fail:
+    fprintf(stderr, "[cloudplay diag] cuda_color_init: FAILED\n"); fflush(stderr);
+    fflush(stderr);
     cuda_color_release();
+    fflush(stderr);
     return 0;
 }
 

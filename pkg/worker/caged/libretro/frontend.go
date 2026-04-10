@@ -63,8 +63,9 @@ type Frontend struct {
 	onData  func([]byte)
 	onVideo func(app.Video)
 	storage Storage
-	scale   float64
-	th      int // draw threads
+	scale    float64
+	pacerFps int // per-core pacer FPS override (0 = use default 30)
+	th       int // draw threads
 	vw, vh  int // out frame size
 
 	// directives
@@ -152,6 +153,7 @@ func NewFrontend(conf config.Emulator, log *logger.Logger) (*Frontend, error) {
 
 func (f *Frontend) LoadCore(emu string) {
 	conf := f.conf.GetLibretroCoreConfig(emu)
+	f.pacerFps = conf.PacerFps
 
 	libExt := ""
 	if ar, err := f.conf.Libretro.Cores.Repo.Guess(); err == nil {
@@ -389,6 +391,7 @@ func (f *Frontend) LoadGame(path string) error {
 func (f *Frontend) AspectRatio() float32          { return f.nano.AspectRatio() }
 func (f *Frontend) AudioSampleRate() int          { return f.nano.AudioSampleRate() }
 func (f *Frontend) FPS() int                      { return f.nano.VideoFramerate() }
+func (f *Frontend) PacerFps() int                  { return f.pacerFps }
 // Flipped reports whether video frames from the emulator are rendered upside
 // down and need to be vertically flipped before display.  GL (OpenGL) renders
 // with the origin at the bottom-left corner, so its frames must be flipped.

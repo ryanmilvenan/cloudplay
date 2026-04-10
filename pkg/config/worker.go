@@ -73,28 +73,13 @@ type Video struct {
 		KeyframeInterval uint
 	}
 	Nvenc struct {
-		Bitrate int
-		Preset  string
-		Tune    string
+		Bitrate          int
+		Preset           string
+		Tune             string
+		Profile          string
+		KeyframeInterval int `yaml:"keyframeInterval"`
 	}
-	// ZeroCopy enables the Phase 3c Vulkan→CUDA→NVENC zero-copy encode path.
-	//
-	// When true and all of the following hold at runtime, pixel data bypasses
-	// the CPU entirely (Vulkan blit → exportable fd → CUDA devptr → NV12 PTX
-	// kernel → NVENC):
-	//   - codec == "h264_nvenc"
-	//   - Vulkan HW render context is active (core requested Vulkan)
-	//   - The Vulkan device supports VK_KHR_external_memory_fd (NVIDIA Linux)
-	//   - Build tags: vulkan + nvenc + linux
-	//
-	// Default: false (CPU readback path is always used when false).
-	//
-	// Phase 3c status: GPU RGBA→NV12 colour conversion is implemented via an
-	// embedded PTX CUDA kernel (BT.601 studio-swing, matching the CPU libyuv
-	// path).  The kernel is JIT-compiled at runtime — no nvcc at build time.
-	// If PTX JIT fails, the stream degrades gracefully (wrong colours, stable
-	// stream).  Tested on NVIDIA RTX 30xx with driver ≥ 525.
-	ZeroCopy bool
+	ZeroCopy bool `yaml:"zeroCopy"`
 }
 
 // allows custom config path

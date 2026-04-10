@@ -97,6 +97,7 @@ func (c *Caged) Scale() float64                   { return c.Emulator.Scale() }
 func (c *Caged) Input(p int, d byte, data []byte) { c.base.Input(p, d, data) }
 func (c *Caged) KbMouseSupport() bool             { return c.base.KbMouseSupport() }
 func (c *Caged) VideoBackend() app.VideoBackend   { return c.base.VideoBackend() }
+func (c *Caged) PacerFps() int                     { return c.base.PacerFps() }
 func (c *Caged) Start()                           { go c.Emulator.Start() }
 func (c *Caged) SetSaveOnClose(v bool)            { c.base.SaveOnClose = v }
 func (c *Caged) SetSessionId(name string)         { c.base.SetSessionId(name) }

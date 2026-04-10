@@ -240,6 +240,11 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 	needsKbMouse := r.App().KbMouseSupport()
 
 	s := room.WithWebRTC(user.Session)
+	s.OnPLI = func() {
+		if mp := r.Media(); mp != nil {
+			mp.IntraRefresh()
+		}
+	}
 	s.OnMessage = func(data []byte) { r.App().Input(user.Index, byte(caged.RetroPad), data) }
 	if needsKbMouse {
 		_ = s.AddChannel("keyboard", func(data []byte) { r.App().Input(user.Index, byte(caged.Keyboard), data) })

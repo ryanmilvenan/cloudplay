@@ -478,6 +478,11 @@ type Provider struct {
 	// This flag lets go_unlock_queue skip expensive GPU sync when wait_sync_index
 	// will handle it.
 	usesWaitSync bool
+
+	// blankBuf is a pre-allocated blank frame returned by ReadFrame when
+	// zero-copy is active and cachedPixels is nil.  Avoids allocating a
+	// fresh 1.35MB buffer every frame (81MB/s of GC pressure at 60fps).
+	blankBuf []byte
 }
 
 // InitBootstrapInterface creates a minimal render interface with stub callbacks.
@@ -656,9 +661,20 @@ func (p *Provider) ReadFrame(w, h uint32) ([]byte, error) {
 			}
 			return cached, nil
 		}
-		// No cached readback yet (first few frames) — return blank.
+		// No cached readback yet — return a blank frame.
+		// When zero-copy is active, cachedPixels is always nil (the GPU blit
+		// path in go_wait_sync_index skips CPU readback entirely).  Reuse a
+		// pre-allocated buffer to avoid 1.35MB/frame of GC pressure (~81MB/s
+		// at 60fps) that causes periodic GC pauses visible as audio stalls.
+		size := int(w * h * 4)
+		if p.zeroCopyAvailable() {
+			if len(p.blankBuf) < size {
+				p.blankBuf = make([]byte, size)
+			}
+			return p.blankBuf, nil
+		}
 		log.Printf("[cloudplay diag] ReadFrame(extHandles) cachedPixels=nil, returning blank w=%d h=%d", w, h)
-		return make([]byte, int(w*h*4)), nil
+		return make([]byte, size), nil
 	}
 
 	// Non-negotiated path: skip first few frames during init.

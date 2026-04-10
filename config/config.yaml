@@ -237,6 +237,7 @@ emulator:
           isGlAllowed: false
           usesLibCo: true
           vfr: true
+          coreAspectRatio: true
           options:
             mupen64plus-rdp-plugin: angrylion
             mupen64plus-rsp-plugin: cxd4

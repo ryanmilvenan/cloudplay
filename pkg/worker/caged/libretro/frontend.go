@@ -284,7 +284,7 @@ func (f *Frontend) Start() {
 
 	defer func() {
 		// Save game on quit if it was saved before (shared or click-saved).
-		if f.SaveOnClose && f.HasSave() {
+		if f.SaveOnClose {
 			f.log.Debug().Msg("save on quit")
 			if err := f.Save(); err != nil {
 				f.log.Error().Err(err).Msg("save on quit failed")
@@ -398,7 +398,7 @@ func (f *Frontend) PacerFps() int                  { return f.pacerFps }
 // Vulkan uses the standard top-left origin — no flip needed.
 func (f *Frontend) Flipped() bool { return f.nano.IsGL() && !f.nano.IsVulkan() }
 func (f *Frontend) FrameSize() (int, int)         { return f.nano.BaseWidth(), f.nano.BaseHeight() }
-func (f *Frontend) HasSave() bool                 { return os.Exists(f.HashPath()) }
+func (f *Frontend) HasSave() bool                 { return os.Exists(f.HashPath()) || os.Exists(f.SRAMPath()) }
 func (f *Frontend) HashPath() string              { return f.storage.GetSavePath() }
 func (f *Frontend) IsPortrait() bool              { return f.nano.IsPortrait() }
 func (f *Frontend) KbMouseSupport() bool          { return f.nano.KbMouseSupport() }
@@ -514,12 +514,13 @@ func (f *Frontend) Save() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	var saveErr error
 	ss, err := nanoarch.SaveState()
 	if err != nil {
-		return err
-	}
-	if err := f.storage.Save(f.HashPath(), ss); err != nil {
-		return err
+		// retro_serialize not supported by this core — not fatal, try SRAM
+		saveErr = err
+	} else if err := f.storage.Save(f.HashPath(), ss); err != nil {
+		saveErr = err
 	}
 	ss = nil
 
@@ -528,8 +529,9 @@ func (f *Frontend) Save() error {
 			return err
 		}
 		sram = nil
+		saveErr = nil // SRAM saved successfully, clear the serialize error
 	}
-	return nil
+	return saveErr
 }
 
 // Load restores the state from the filesystem.
@@ -539,15 +541,17 @@ func (f *Frontend) Load() error {
 
 	ss, err := f.storage.Load(f.HashPath())
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		f.log.Warn().Err(err).Msg("load save state file failed")
 	}
-	if err := nanoarch.RestoreSaveState(ss); err != nil {
-		return err
+	if ss != nil {
+		if err := nanoarch.RestoreSaveState(ss); err != nil {
+			f.log.Warn().Err(err).Msg("restore save state failed, continuing to SRAM")
+		}
 	}
 
 	sram, err := f.storage.Load(f.SRAMPath())
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		f.log.Warn().Err(err).Msg("load SRAM file failed")
 	}
 	if sram != nil {
 		nanoarch.RestoreSaveRAM(sram)

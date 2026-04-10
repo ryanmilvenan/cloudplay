@@ -337,6 +337,13 @@ func (e *NVENC) Encode(yuv []byte) []byte {
 		return nil
 	}
 
+	// Vertical flip for GL cores (OpenGL renders bottom-up).
+	// x264 handles this natively via X264_CSP_VFLIP; NVENC has no equivalent,
+	// so we reverse the row order of each I420 plane before upload.
+	if e.flipped {
+		flipI420(yuv, e.width, e.height)
+	}
+
 	var outSize C.int
 	data := C.nvenc_encode(e.ctx, (*C.uint8_t)(unsafe.SliceData(yuv)), &outSize)
 	if data == nil || outSize == 0 {
@@ -360,11 +367,39 @@ func (e *NVENC) Info() string {
 	return fmt.Sprintf("h264_nvenc (preset=%s, tune=%s, profile=%s, bitrate=%dkbps, gop=%d)", e.preset, e.tune, e.profile, e.bitrate, e.keyframeInterval)
 }
 
-// SetFlip stores the flip flag. Vertical flip for NVENC would require a
-// separate preprocessing step; it is a no-op here unless the caller handles
-// it at the YUV level before passing frames in.
+// SetFlip enables vertical flipping of frames before encoding.
+// GL-based cores render with a bottom-left origin, producing upside-down
+// frames. This flag causes Encode to reverse row order in the I420 planes
+// before uploading to NVENC.
 func (e *NVENC) SetFlip(b bool) {
 	e.flipped = b
+}
+
+// flipI420 reverses the row order of each plane in an I420 buffer in-place.
+// Y plane: width x height, U plane: width/2 x height/2, V plane: same as U.
+func flipI420(yuv []byte, width, height int) {
+	ySize := width * height
+	uvW := width >> 1
+	uvH := height >> 1
+
+	// Flip Y plane
+	flipPlane(yuv[:ySize], width, height)
+	// Flip U plane
+	flipPlane(yuv[ySize:ySize+uvW*uvH], uvW, uvH)
+	// Flip V plane
+	flipPlane(yuv[ySize+uvW*uvH:], uvW, uvH)
+}
+
+// flipPlane reverses row order in a contiguous plane buffer in-place.
+func flipPlane(plane []byte, stride, rows int) {
+	tmp := make([]byte, stride)
+	for top, bot := 0, rows-1; top < bot; top, bot = top+1, bot-1 {
+		topOff := top * stride
+		botOff := bot * stride
+		copy(tmp, plane[topOff:topOff+stride])
+		copy(plane[topOff:topOff+stride], plane[botOff:botOff+stride])
+		copy(plane[botOff:botOff+stride], tmp)
+	}
 }
 
 // Shutdown frees all FFmpeg/CUDA resources held by the encoder.

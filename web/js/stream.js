@@ -59,12 +59,7 @@ const play = () => {
 
 const toggle = (show) => state.screen.toggleAttribute('hidden', show === undefined ? show : !show)
 
-const resize = (w, h, aspect, fit) => {
-    if (!state.ready) return;
-    // CSS handles all sizing: width/height/aspect-ratio are left to main.css.
-    // object-fit: contain on a 100%x100% element lets the browser center
-    // the native video content automatically — no inline styles needed.
-}
+const resize = (w, h, aspect, fit) => {    if (!state.ready) return;    const el = state.screen;    if (aspect !== undefined && aspect > 0) {        el.style.setProperty("aspect-ratio", "" + aspect, "important");        el.style.setProperty("width", "auto", "important");        el.style.setProperty("height", "100%", "important");        el.style.setProperty("max-width", "100%", "important");        el.style.setProperty("position", "absolute", "important");        el.style.setProperty("left", "50%", "important");        el.style.setProperty("top", "0", "important");        el.style.setProperty("transform", "translateX(-50%)", "important");    }    if (fit !== undefined) {        el.style.setProperty("object-fit", fit, "important");    }}
 
 const showPlayButton = () => {
     state.autoplayWait = true

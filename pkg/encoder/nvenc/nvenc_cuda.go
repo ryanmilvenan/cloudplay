@@ -293,6 +293,7 @@ typedef struct {
     int         height;
     int         ptx_ok;          // 1 if PTX compiled and kernels loaded OK
     int         initialised;     // 1 if buffers allocated
+    CUcontext   cu_ctx;          // CUDA context these resources belong to
 } cuda_color_ctx;
 
 static cuda_color_ctx g_color_ctx = {0};
@@ -313,9 +314,12 @@ static void cuda_color_release(void) {
 // Idempotent: subsequent calls are no-ops unless dimensions changed.
 // Returns 1 on success, 0 on failure (PTX JIT error or OOM).
 static int cuda_color_init(int width, int height) {
+    CUcontext cur_ctx = NULL;
+    cuCtxGetCurrent(&cur_ctx);
     if (g_color_ctx.initialised &&
         g_color_ctx.width == width &&
-        g_color_ctx.height == height) {
+        g_color_ctx.height == height &&
+        g_color_ctx.cu_ctx == cur_ctx) {
         return g_color_ctx.ptx_ok;
     }
 
@@ -389,6 +393,7 @@ static int cuda_color_init(int width, int height) {
     g_color_ctx.height      = height;
     g_color_ctx.ptx_ok      = 1;
     g_color_ctx.initialised = 1;
+    g_color_ctx.cu_ctx      = cur_ctx;
     fprintf(stderr, "[cloudplay diag] cuda_color_init: SUCCESS\n"); fflush(stderr);
     fflush(stderr);
     return 1;

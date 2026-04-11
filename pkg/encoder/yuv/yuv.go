@@ -27,6 +27,12 @@ const FourccArgb = libyuv.FourccArgb
 const FourccAbgr = libyuv.FourccAbgr
 const FourccRgb0 = libyuv.FourccRgb0
 
+func yuvBufSize(w, h int) int {
+	cw := (w + 1) / 2
+	ch := (h + 1) / 2
+	return w*h + 2*cw*ch
+}
+
 func NewYuvConv(w, h int, scale float64) Conv {
 	if scale < 1 {
 		scale = 1
@@ -34,12 +40,13 @@ func NewYuvConv(w, h int, scale float64) Conv {
 
 	sw, sh := round(w, scale), round(h, scale)
 	conv := Conv{w: w, h: h, sw: sw, sh: sh, scale: scale}
-	bufSize := int(float64(w) * float64(h) * 1.5)
+	// Use integer math matching I420 plane layout — float w*h*1.5 truncates for odd dimensions.
+	bufSize := yuvBufSize(w, h)
 
 	if scale == 1 {
 		conv.frame = make([]byte, bufSize)
 	} else {
-		bufSizeSc := int(float64(sw) * float64(sh) * 1.5)
+		bufSizeSc := yuvBufSize(sw, sh)
 		// [original frame][scaled frame          ]
 		frames := make([]byte, bufSize+bufSizeSc)
 		conv.frame = frames[:bufSize]

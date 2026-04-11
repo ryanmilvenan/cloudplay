@@ -195,6 +195,8 @@ emulator:
           options:
             pcsx2_bios: SCPH-70012_BIOS_V12_USA_200.bin
             pcsx2_renderer: Software
+            pcsx2_enable_rumble1: 100%%
+            pcsx2_enable_rumble2: 100%%
             pcsx2_multitap1: enabled
             pcsx2_multitap2: enabled
         pcsx:

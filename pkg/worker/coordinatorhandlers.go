@@ -104,7 +104,7 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 	if r == nil { // new room
 		uid := rq.Rid
 		if uid == "" {
-			uid = games.GenerateRoomID(gameName)
+			uid = gameName
 		}
 		game := games.GameMetadata(gameInfo)
 

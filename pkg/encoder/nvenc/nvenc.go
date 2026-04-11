@@ -379,15 +379,15 @@ func (e *NVENC) SetFlip(b bool) {
 // Y plane: width x height, U plane: width/2 x height/2, V plane: same as U.
 func flipI420(yuv []byte, width, height int) {
 	ySize := width * height
-	uvW := width >> 1
-	uvH := height >> 1
+	uvW := (width + 1) / 2
+	uvH := (height + 1) / 2
 
 	// Flip Y plane
 	flipPlane(yuv[:ySize], width, height)
 	// Flip U plane
 	flipPlane(yuv[ySize:ySize+uvW*uvH], uvW, uvH)
 	// Flip V plane
-	flipPlane(yuv[ySize+uvW*uvH:], uvW, uvH)
+	flipPlane(yuv[ySize+uvW*uvH:ySize+2*uvW*uvH], uvW, uvH)
 }
 
 // flipPlane reverses row order in a contiguous plane buffer in-place.

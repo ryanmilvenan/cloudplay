@@ -13,6 +13,7 @@ const slotButtons = playersEl.querySelectorAll('.overlay-player-slot');
 const inviteBtn = document.getElementById('overlay-invite');
 const saveBtn = document.getElementById('overlay-save');
 const loadBtn = document.getElementById('overlay-load');
+const resetBtn = document.getElementById('overlay-reset');
 const leaveBtn = document.getElementById('overlay-leave');
 
 let backdropEl = null;
@@ -35,6 +36,7 @@ let onSlotChange = () => {};
 let onInvite = () => {};
 let onSave = () => {};
 let onLoad = () => {};
+let onReset = () => {};
 let onLeave = () => {};
 
 const createBackdrop = () => {
@@ -126,6 +128,7 @@ inviteBtn.addEventListener('click', () => {
 
 saveBtn.addEventListener('click', () => onSave());
 loadBtn.addEventListener('click', () => onLoad());
+resetBtn.addEventListener('click', () => onReset());
 leaveBtn.addEventListener('click', () => onLeave());
 
 // Desktop: Escape to close
@@ -170,5 +173,6 @@ export const overlay = {
     set onInvite(fn) { onInvite = fn; },
     set onSave(fn) { onSave = fn; },
     set onLoad(fn) { onLoad = fn; },
+    set onReset(fn) { onReset = fn; },
     set onLeave(fn) { onLeave = fn; },
 };

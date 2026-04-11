@@ -173,6 +173,16 @@
     background: rgba(255,255,255,0.13);
 }
 
+.overlay-btn--warn {
+    color: #fbbf24;
+    border-color: rgba(251,191,36,0.2);
+}
+
+.overlay-btn--warn:active,
+.overlay-btn--warn:hover {
+    background: rgba(251,191,36,0.1);
+}
+
 .overlay-btn--danger {
     color: #f87171;
     border-color: rgba(248,113,113,0.2);

@@ -23,7 +23,7 @@ import (
 var inputDiagCount int64
 
 const (
-	maxPort    = 4
+	maxPort    = 8
 	numAxes    = 4
 	RetrokLast = int(C.RETROK_LAST)
 )

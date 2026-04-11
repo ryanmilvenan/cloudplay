@@ -60,7 +60,8 @@ type Frontend struct {
 	log     *logger.Logger
 	nano    *nanoarch.Nanoarch
 	onAudio func(app.Audio)
-	onData  func([]byte)
+	onData   func([]byte)
+	onRumble func([]byte)
 	onVideo func(app.Video)
 	storage Storage
 	scale    float64
@@ -94,6 +95,7 @@ var (
 	audioPool sync.Pool
 	noAudio   = func(app.Audio) {}
 	noData    = func([]byte) {}
+	noRumble  = func([]byte) {}
 	noVideo   = func(app.Video) {}
 	videoPool sync.Pool
 	lastFrame *app.Video
@@ -135,6 +137,7 @@ func NewFrontend(conf config.Emulator, log *logger.Logger) (*Frontend, error) {
 		log:          log,
 		onAudio:      noAudio,
 		onData:       noData,
+		onRumble:     noRumble,
 		onVideo:      noVideo,
 		shutdownDone: make(chan struct{}),
 		storage:      store,
@@ -256,6 +259,11 @@ func (f *Frontend) linkNano(nano *nanoarch.Nanoarch) {
 	f.nano.OnVideo = f.handleVideo
 	f.nano.OnAudio = f.handleAudio
 	f.nano.OnDup = f.handleDup
+	f.nano.OnRumble = func(port uint, effect uint, strength uint16) {
+		// Encode: [0xFF, port, effect, strengthHi, strengthLo]
+		// Route through onData which Room wires to SendData (WebRTC data channel)
+		f.onData([]byte{0xFF, byte(port), byte(effect), byte(strength >> 8), byte(strength)})
+	}
 }
 
 func (f *Frontend) SetVideoChangeCb(fn func()) {
@@ -413,6 +421,7 @@ func (f *Frontend) Scale() float64                { return f.scale }
 func (f *Frontend) SetAudioCb(cb func(app.Audio)) { f.onAudio = cb }
 func (f *Frontend) SetSessionId(name string)      { f.storage.SetMainSaveName(name) }
 func (f *Frontend) SetDataCb(cb func([]byte))     { f.onData = cb }
+func (f *Frontend) SetRumbleCb(cb func([]byte))   { f.onRumble = cb }
 func (f *Frontend) SetVideoCb(ff func(app.Video)) { f.onVideo = ff }
 func (f *Frontend) Tick()                         { f.mu.Lock(); f.nano.Run(); f.mu.Unlock() }
 func (f *Frontend) ViewportRecalculate()          { f.mu.Lock(); f.vw, f.vh = f.ViewportCalc(); f.mu.Unlock() }
@@ -517,7 +526,9 @@ func (f *Frontend) Save() error {
 	var saveErr error
 	ss, err := nanoarch.SaveState()
 	if err != nil {
-		// retro_serialize not supported by this core — not fatal, try SRAM
+		// retro_serialize not supported by this core — not fatal, try SRAM.
+		// Remove any stale .dat file so a corrupt state is never loaded next session.
+		stdos.Remove(f.HashPath())
 		saveErr = err
 	} else if err := f.storage.Save(f.HashPath(), ss); err != nil {
 		saveErr = err

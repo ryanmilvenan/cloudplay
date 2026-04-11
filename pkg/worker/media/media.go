@@ -175,6 +175,9 @@ func (wmp *WebrtcMediaPipe) encodeAudio(pcm samples, ms float32) {
 }
 
 func (wmp *WebrtcMediaPipe) initVideo(w, h int, scale float64, conf config.Video) (err error) {
+	// Ensure source dimensions are even — odd widths cause buffer overflows
+	// in I420 chroma plane calculations throughout the encode pipeline.
+	w, h = (w+1)&^1, (h+1)&^1
 	sw, sh := round(w, scale), round(h, scale)
 	enc, err := encoder.NewVideoEncoder(w, h, sw, sh, scale, conf, wmp.log)
 	if err != nil {

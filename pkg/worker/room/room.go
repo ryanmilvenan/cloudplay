@@ -63,6 +63,7 @@ func NewRoom[T Session](id string, app app.App, um SessionManager[T], media Medi
 	if app != nil && media != nil {
 		room.InitVideo()
 		room.InitAudio()
+		room.InitData()
 	}
 	return room
 }
@@ -85,8 +86,12 @@ func (r *Room[T]) InitVideo() {
 	})
 }
 
+func (r *Room[T]) InitData() {
+	r.app.SetDataCb(func(d []byte) { r.Send(d) })
+}
+
 func (r *Room[T]) App() app.App         { return r.app }
-func (r *Room[T]) BindAppMedia()        { r.InitAudio(); r.InitVideo() }
+func (r *Room[T]) BindAppMedia()        { r.InitAudio(); r.InitVideo(); r.InitData() }
 func (r *Room[T]) Id() string           { return r.id }
 func (r *Room[T]) SetApp(app app.App)   { r.app = app }
 func (r *Room[T]) Media() MediaPipe     { return r.media }

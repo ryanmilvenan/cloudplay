@@ -191,7 +191,7 @@ void *same_thread_with_args(void *f, int type, ...);
 
 // Input State Cache
 
-#define INPUT_MAX_PORTS 4
+#define INPUT_MAX_PORTS 8
 #define INPUT_MAX_KEYS 512
 
 typedef struct {
@@ -337,8 +337,8 @@ bool core_environment_cgo(unsigned cmd, void *data) {
           return true;
           break;
         case RETRO_ENVIRONMENT_GET_INPUT_MAX_USERS:
-          *(unsigned *)data = 4;
-          core_log_cgo(RETRO_LOG_DEBUG, "Set max users: %d\n", 4);
+          *(unsigned *)data = INPUT_MAX_PORTS;
+          core_log_cgo(RETRO_LOG_DEBUG, "Set max users: %d\n", INPUT_MAX_PORTS);
           return true;
           break;
         case RETRO_ENVIRONMENT_GET_INPUT_BITMASKS:
@@ -645,4 +645,13 @@ void *same_thread_with_args2(void *f, int type, void *arg1, void *arg2) {
 
 void same_thread(void *f) {
     same_thread_with_args(f, CALL_VOID);
+}
+
+bool core_rumble_cgo(unsigned port, enum retro_rumble_effect effect, uint16_t strength) {
+    bool coreRumble(unsigned, unsigned, uint16_t);
+    static int rumble_diag_count = 0;
+    if (++rumble_diag_count <= 20 || (strength > 0 && rumble_diag_count % 60 == 0)) {
+        fprintf(stderr, "[DIAG core_rumble_cgo] port=%u effect=%u strength=%u call=%d\n", port, (unsigned)effect, strength, rumble_diag_count);
+    }
+    return coreRumble(port, (unsigned)effect, strength);
 }

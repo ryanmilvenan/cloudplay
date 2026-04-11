@@ -49,9 +49,7 @@ const start = (iceservers) => {
             inputReady = true;
             pub(WEBRTC_CONNECTION_READY)
         };
-        if (onData) {
-            dataChannel.onmessage = onData;
-        }
+        dataChannel.onmessage = (msg) => { if (onData) onData(msg); };
         dataChannel.onclose = () => {
             inputReady = false
             log.info('[rtc] the input channel has been closed')
@@ -177,6 +175,7 @@ const ice = (() => {
 export const webrtc = {
     start,
     setRemoteDescription: async (data, media) => {
+        if (!connection) return;
         log.debug('[rtc] remote SDP', data)
         const offer = new RTCSessionDescription(JSON.parse(atob(data)));
         await connection.setRemoteDescription(offer);
@@ -201,7 +200,7 @@ export const webrtc = {
         }
     },
     flushCandidates: () => {
-        if (isFlushing || !isAnswered) return;
+        if (isFlushing || !isAnswered || !connection) return;
         isFlushing = true;
         log.debug('[rtc] flushing candidates', candidates);
         candidates.forEach(data => {
@@ -230,7 +229,7 @@ export const webrtc = {
     isConnected: () => connected,
     isInputReady: () => inputReady,
     stats: async () => {
-        if (!connected) return Promise.resolve();
+        if (!connected || !connection) return Promise.resolve();
         return await connection.getStats()
     },
     stop,

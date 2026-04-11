@@ -139,7 +139,18 @@ func (p *Peer) SendVideo(data []byte, dur int32) {
 	}
 }
 
-func (p *Peer) SendData(data []byte) { _ = p.d.Send(data) }
+func (p *Peer) SendData(data []byte) {
+	if p.d == nil {
+		return
+	}
+	if p.d.ReadyState() != webrtc.DataChannelStateOpen {
+		p.log.Warn().Msgf("SendData: data channel not open (state=%v)", p.d.ReadyState())
+		return
+	}
+	if err := p.d.Send(data); err != nil {
+		p.log.Error().Err(err).Msg("SendData failed")
+	}
+}
 
 func (p *Peer) send(data []byte, duration int64, fn func(media.Sample) error) error {
 	sample, _ := samplePool.Get().(*media.Sample)

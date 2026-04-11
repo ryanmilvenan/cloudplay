@@ -281,6 +281,11 @@ overlay.onSlotChange = (slot) => {
 
 overlay.onSave = () => saveGame();
 overlay.onLoad = () => loadGame();
+overlay.onReset = () => {
+    api.game.reset(room.id);
+    message.show("Game reset");
+    overlay.close();
+};
 
 overlay.onLeave = () => {
     message.show('Killing session...');
@@ -327,6 +332,37 @@ slotPickerBtns.forEach(btn => {
 });
 
 // ── Message handling ──
+
+// Rumble/haptic feedback via Gamepad Vibration API.
+// Track both motors and combine into a single playEffect call,
+// since each playEffect replaces the previous one.
+const rumbleState = [{strong: 0, weak: 0, timer: null},
+                     {strong: 0, weak: 0, timer: null},
+                     {strong: 0, weak: 0, timer: null},
+                     {strong: 0, weak: 0, timer: null}];
+
+const applyRumble = (port) => {
+    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+    const gp = gamepads[port];
+    if (!gp || !gp.vibrationActuator) return;
+    const s = rumbleState[port];
+    gp.vibrationActuator.playEffect('dual-rumble', {
+        duration: 150,
+        strongMagnitude: s.strong,
+        weakMagnitude: s.weak,
+    }).catch(() => {});
+};
+
+const handleRumble = (port, effect, strength) => {
+    if (port >= rumbleState.length) return;
+    const s = rumbleState[port];
+    const intensity = strength / 0xFFFF;
+    if (effect === 0) s.strong = intensity;
+    else s.weak = intensity;
+    // Debounce: wait 5ms for the paired motor update before applying
+    if (s.timer) clearTimeout(s.timer);
+    s.timer = setTimeout(() => { s.timer = null; applyRumble(port); }, 5);
+};
 
 const onMessage = (m) => {
     const {id, t, p: payload} = m;
@@ -657,7 +693,17 @@ sub(GAME_PLAYER_IDX_SET, idx => {
 sub(GAME_ERROR_NO_FREE_SLOTS, () => message.show("No free slots :(", 2500));
 sub(WEBRTC_NEW_CONNECTION, (data) => {
     workerManager.whoami(data.wid);
-    webrtc.onData = (x) => onMessage(api.decode(x.data))
+    webrtc.onData = (x) => {
+        // Check for binary rumble messages (prefix 0xFF)
+        if (x.data instanceof ArrayBuffer) {
+            const bytes = new Uint8Array(x.data);
+            if (bytes.length >= 5 && bytes[0] === 0xFF) {
+                handleRumble(bytes[1], bytes[2], (bytes[3] << 8) | bytes[4]);
+                return;
+            }
+        }
+        onMessage(api.decode(x.data))
+    }
     webrtc.start(data.ice);
     if (data.roomId) {
         room.id = data.roomId;

@@ -28,6 +28,7 @@ void core_audio_sample_cgo(int16_t left, int16_t right);
 void core_input_poll_cgo();
 void core_log_cgo(int level, const char *msg);
 void core_video_refresh_cgo(void *data, unsigned width, unsigned height, size_t pitch);
+bool core_rumble_cgo(unsigned port, enum retro_rumble_effect effect, uint16_t strength);
 void init_video_cgo();
 void deinit_video_cgo();
 

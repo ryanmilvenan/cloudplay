@@ -163,6 +163,7 @@ type Handlers struct {
 	OnVideo        func(data []byte, delta int32, fi FrameInfo)
 	OnDup          func()
 	OnSystemAvInfo func()
+	OnRumble       func(port uint, effect uint, strength uint16)
 }
 
 type FrameInfo struct {
@@ -211,9 +212,10 @@ var Nan0 = Nanoarch{
 	Stopped:  atomic.Bool{},
 	limiter:  func(fn func()) { fn() },
 	Handlers: Handlers{
-		OnAudio: func(unsafe.Pointer, int) {},
-		OnVideo: func([]byte, int32, FrameInfo) {},
-		OnDup:   func() {},
+		OnAudio:  func(unsafe.Pointer, int) {},
+		OnVideo:  func([]byte, int32, FrameInfo) {},
+		OnDup:    func() {},
+		OnRumble: func(uint, uint, uint16) {},
 	},
 }
 
@@ -915,6 +917,15 @@ func coreVideoRefresh(data unsafe.Pointer, width, height uint, packed uint) {
 	Nan0.Handlers.OnVideo(data_, int32(dt), FrameInfo{W: width, H: height, Stride: packed})
 }
 
+//export coreRumble
+func coreRumble(port C.unsigned, effect C.unsigned, strength C.uint16_t) C.bool {
+	if Nan0.Stopped.Load() {
+		return false
+	}
+	Nan0.Handlers.OnRumble(uint(port), uint(effect), uint16(strength))
+	return true
+}
+
 //export coreAudioSampleBatch
 func coreAudioSampleBatch(data unsafe.Pointer, frames C.size_t) C.size_t {
 	if Nan0.Stopped.Load() {
@@ -1101,6 +1112,14 @@ func coreEnvironment(cmd C.unsigned, data unsafe.Pointer) C.bool {
 	case C.RETRO_ENVIRONMENT_GET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_SUPPORT:
 		// Indicate to the core which negotiation interface versions we support.
 		return C.bool(handleGetHWRenderContextNegotiationSupport(data))
+	case C.RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE:
+		rumble := (*C.struct_retro_rumble_interface)(data)
+		rumble.set_rumble_state = (C.retro_set_rumble_state_t)(C.core_rumble_cgo)
+		Nan0.log.Info().Msg("Rumble interface registered")
+		return true
+	}
+	if cmd != 15 && cmd != 65576 && cmd != 10 && cmd != 65546 {
+		Nan0.log.Debug().Msgf("Unhandled env cmd=%d", cmd)
 	}
 	return false
 }

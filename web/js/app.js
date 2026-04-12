@@ -294,6 +294,24 @@ overlay.onLeave = () => {
     api.game.quit(room.id);
 };
 
+// Safari workaround: the floating #audio-btn doesn't render reliably,
+// and Safari's autoplay policy requires a user gesture to unmute a
+// video that started muted. Route through the cog panel instead —
+// tapping this button inside the click handler satisfies the gesture
+// requirement. Calls run synchronously from the click to keep Safari's
+// user-gesture chain intact.
+overlay.onAudio = () => {
+    const video = stream.video.el;
+    const willMute = !video.muted;
+    stream.audio.mute(willMute);
+    if (!willMute) {
+        // Re-trigger play() in case earlier autoplay was blocked.
+        stream.play();
+    }
+    interacted = true;
+    overlay.setAudioMuted(video.muted);
+};
+
 // ── Late-join slot picker ──
 
 const slotPickerEl = document.getElementById('slot-picker');

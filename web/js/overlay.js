@@ -10,6 +10,7 @@ const cogEl = document.getElementById('overlay-cog');
 const gameTitleEl = document.getElementById('overlay-game-title');
 const playersEl = document.getElementById('overlay-players');
 const slotButtons = playersEl.querySelectorAll('.overlay-player-slot');
+const audioBtn = document.getElementById('overlay-audio');
 const inviteBtn = document.getElementById('overlay-invite');
 const saveBtn = document.getElementById('overlay-save');
 const loadBtn = document.getElementById('overlay-load');
@@ -38,6 +39,7 @@ let onSave = () => {};
 let onLoad = () => {};
 let onReset = () => {};
 let onLeave = () => {};
+let onAudio = () => {};
 
 const createBackdrop = () => {
     if (backdropEl) return backdropEl;
@@ -131,6 +133,11 @@ loadBtn.addEventListener('click', () => onLoad());
 resetBtn.addEventListener('click', () => onReset());
 leaveBtn.addEventListener('click', () => onLeave());
 
+// The audio button's click handler MUST call video.play() / muted=false
+// directly inside this handler — Safari requires the user-gesture chain
+// to reach the media API, so the app.js callback must run synchronously.
+audioBtn.addEventListener('click', () => onAudio());
+
 // Desktop: Escape to close
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && isOpen) {
@@ -175,4 +182,9 @@ export const overlay = {
     set onLoad(fn) { onLoad = fn; },
     set onReset(fn) { onReset = fn; },
     set onLeave(fn) { onLeave = fn; },
+    set onAudio(fn) { onAudio = fn; },
+    /** Update audio-button label to reflect current muted state. */
+    setAudioMuted(muted) {
+        audioBtn.textContent = muted ? '🔊 Enable Audio' : '🔇 Mute Audio';
+    },
 };

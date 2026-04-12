@@ -9,7 +9,15 @@ const containerEl = document.getElementById('game-list-container');
 const screenEl = document.getElementById('game-list-screen');
 
 let games = [];
+// selectedIndex is the index into `games` (alphabetical order) — it
+// identifies the actual game that will launch on Enter/click.
 let selectedIndex = 0;
+// visualOrder is a flat list of `games` indices in the order they appear
+// in the DOM (system-grouped, system labels sorted alphabetically). It is
+// rebuilt by render() and is what arrow-key / gamepad navigation walks.
+// Without this, pressing Down jumps by alphabetical neighbour instead of
+// visual neighbour, so the highlight and the launched game disagree.
+let visualOrder = [];
 let onStart = () => {};
 
 const systemLabel = (system = '') => {
@@ -41,6 +49,7 @@ const groupedGames = () => {
 
 const render = () => {
     containerEl.innerHTML = '';
+    visualOrder = [];
 
     groupedGames().forEach(([system, entries]) => {
         const sectionEl = document.createElement('section');
@@ -57,6 +66,7 @@ const render = () => {
         listEl.className = 'game-system-card__list';
 
         entries.forEach(({ game, index }) => {
+            visualOrder.push(index);
             const el = document.createElement('div');
             el.className = 'game-list-item' + (index === selectedIndex ? ' selected' : '');
             el.dataset.index = String(index);
@@ -77,18 +87,22 @@ const render = () => {
     scrollIntoView();
 };
 
+// select takes a data index (position in the alphabetically-sorted `games`
+// array) and applies `.selected` to the DOM node whose dataset.index
+// matches — NOT to the DOM node at position `selectedIndex`, because the
+// DOM is rendered in system-grouped order and the two numberings disagree.
 const select = (index) => {
     if (games.length === 0) return;
     selectedIndex = ((index % games.length) + games.length) % games.length;
     const items = containerEl.querySelectorAll('.game-list-item');
-    items.forEach((el, i) => el.classList.toggle('selected', i === selectedIndex));
+    items.forEach(el => el.classList.toggle('selected', Number(el.dataset.index) === selectedIndex));
     scrollIntoView();
 };
 
 const scrollIntoView = () => {
-    const items = containerEl.querySelectorAll('.game-list-item');
-    if (items[selectedIndex]) {
-        items[selectedIndex].scrollIntoView({block: 'nearest', behavior: 'smooth'});
+    const el = containerEl.querySelector(`.game-list-item[data-index="${selectedIndex}"]`);
+    if (el) {
+        el.scrollIntoView({block: 'nearest', behavior: 'smooth'});
     }
 };
 
@@ -106,11 +120,22 @@ const hide = () => {
 let scrollInterval = null;
 const SCROLL_INTERVAL_MS = 180;
 
+// stepVisual moves the selection by `direction` steps through the
+// visual (system-grouped) order the user actually sees on screen.
+const stepVisual = (direction) => {
+    if (visualOrder.length === 0) return;
+    const currentVisualPos = visualOrder.indexOf(selectedIndex);
+    // If selectedIndex isn't in visualOrder for some reason, start at 0.
+    const basePos = currentVisualPos < 0 ? 0 : currentVisualPos;
+    const nextVisualPos = ((basePos + direction) % visualOrder.length + visualOrder.length) % visualOrder.length;
+    select(visualOrder[nextVisualPos]);
+};
+
 const scroll = (direction) => {
     clearInterval(scrollInterval);
     if (direction === 0) return;
-    select(selectedIndex + direction);
-    scrollInterval = setInterval(() => select(selectedIndex + direction), SCROLL_INTERVAL_MS);
+    stepVisual(direction);
+    scrollInterval = setInterval(() => stepVisual(direction), SCROLL_INTERVAL_MS);
 };
 
 export const gameListNew = {

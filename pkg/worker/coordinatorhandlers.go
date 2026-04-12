@@ -3,6 +3,7 @@ package worker
 import (
 	"encoding/base64"
 	"log"
+	"sync/atomic"
 
 	"github.com/giongto35/cloud-game/v3/pkg/api"
 	"github.com/giongto35/cloud-game/v3/pkg/com"
@@ -84,13 +85,22 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 
 	// +injects game data into the original game request
 	// the name of the game either in the `room id` field or
-	// it's in the initial request
+	// it's in the initial request.
+	//
+	// NOTE: rooms are created with `uid = gameName` when the host starts
+	// with an empty Rid (see the `if r == nil` block below), so most
+	// joining users arrive with rq.Rid = "NHL 2007 (USA)" rather than
+	// the encoded "<hex>___<gameName>" format that ExtractAppNameFromUrl
+	// expects. Earlier code hard-errored here, which caused joining
+	// players' StartGame to return EmptyPacket before the OnMessage
+	// handler below was ever installed — so their WebRTC input packets
+	// landed on a nil callback and silently disappeared. Fall back to
+	// treating the Rid as the game name when decoding fails.
 	gameName := rq.Game
 	if rq.Rid != "" {
 		name := w.launcher.ExtractAppNameFromUrl(rq.Rid)
 		if name == "" {
-			c.log.Warn().Msg("couldn't decode game name from the room id")
-			return api.EmptyPacket
+			name = rq.Rid
 		}
 		gameName = name
 	}
@@ -190,6 +200,26 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 
 		r.BindAppMedia()
 
+		// BindAppMedia wires the app's data callback to r.Send which
+		// broadcasts to every user in the room. That's wrong for rumble
+		// packets, which are per-port (encoded [0xFF, port, effect, hi, lo])
+		// — every peer was feeling the host's controller rumble. Override
+		// the callback here so rumble targets only the user whose Index
+		// matches the rumbling port; everything else still broadcasts.
+		r.App().SetDataCb(func(d []byte) {
+			if len(d) >= 2 && d[0] == 0xFF {
+				targetPort := int(d[1])
+				for u := range w.router.Users().Values() {
+					if u.Index == targetPort {
+						u.SendData(d)
+						return
+					}
+				}
+				return
+			}
+			r.Send(d)
+		})
+
 		// Phase 3: attempt to arm the Vulkan→CUDA→NVENC zero-copy encode path.
 		//
 		// Conditions (all must hold):
@@ -245,7 +275,17 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 			mp.IntraRefresh()
 		}
 	}
-	s.OnMessage = func(data []byte) { r.App().Input(user.Index, byte(caged.RetroPad), data) }
+	// Per-peer rate-limited input logging so we can see whether joining
+	// users' packets actually reach the server. Sampled to avoid flooding.
+	c.log.Info().Msgf("[INPUT-DIAG] installing OnMessage user=%s idx=%d", user.Id(), user.Index)
+	var inputDiagN uint64
+	s.OnMessage = func(data []byte) {
+		n := atomic.AddUint64(&inputDiagN, 1)
+		if n <= 10 || n%300 == 0 {
+			c.log.Info().Msgf("[INPUT-DIAG] rx user=%s idx=%d n=%d bytes=%d", user.Id(), user.Index, n, len(data))
+		}
+		r.App().Input(user.Index, byte(caged.RetroPad), data)
+	}
 	if needsKbMouse {
 		_ = s.AddChannel("keyboard", func(data []byte) { r.App().Input(user.Index, byte(caged.Keyboard), data) })
 		_ = s.AddChannel("mouse", func(data []byte) { r.App().Input(user.Index, byte(caged.Mouse), data) })

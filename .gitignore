@@ -79,3 +79,8 @@ hi/
 nvram/
 *.mcd
 
+
+
+### ROMs (never tracked — live on moon under assets/games/, .gitignored here)
+assets/games/
+games/

@@ -49,7 +49,14 @@ func (h *Hub) handleUserConnection() http.HandlerFunc {
 	)
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		h.log.Debug().Msgf("Handshake %v", r.Host)
+		// Parse ingress-injected identity headers *before* the WS
+		// upgrade, while r.Header still carries them. These come from
+		// oauth2-proxy (real users) or the chain-claude-test bypass
+		// middleware (the Claude agent); see pkg/api/identity.go.
+		identity := api.IdentityFromHeaders(r.Header)
+
+		h.log.Debug().Msgf("Handshake %v identity=%s/%s anon=%v",
+			r.Host, identity.Sub, identity.Username, identity.IsAnonymous())
 
 		conn, err := connector.Connect(w, r)
 		if err != nil {
@@ -58,6 +65,7 @@ func (h *Hub) handleUserConnection() http.HandlerFunc {
 		}
 
 		user := NewUser(conn, log)
+		user.SetIdentity(identity)
 		defer h.users.RemoveDisconnect(user)
 		done := user.HandleRequests(h, h.conf)
 		params := r.URL.Query()

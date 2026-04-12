@@ -49,7 +49,15 @@ type (
 		Stateful
 		Candidate string `json:"candidate"` // Base64-encoded ICE candidate
 	}
-	WebrtcInitRequest  Stateful
+	WebrtcInitRequest struct {
+		Stateful
+		// Identity is injected by the coordinator on WS upgrade from
+		// X-Auth-Request-* headers (set by oauth2-proxy or the
+		// chain-claude-test bypass). Optional — zero value means
+		// anonymous; the worker falls back to treating the user as a
+		// guest of the room host in that case.
+		Identity Identity `json:"identity,omitempty"`
+	}
 	WebrtcInitResponse string
 
 	AppVideoInfo struct {

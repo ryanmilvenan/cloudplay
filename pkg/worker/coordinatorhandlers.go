@@ -51,7 +51,13 @@ func (c *coordinator) HandleWebrtcInit(rq api.WebrtcInitRequest, w *Worker, fact
 	}
 
 	user := room.NewGameSession(rq.Id, peer) // use user uid from the coordinator
-	c.log.Info().Msgf("Peer connection: %s", user.Id())
+	user.Identity = rq.Identity
+	if !rq.Identity.IsAnonymous() {
+		c.log.Info().Msgf("Peer connection: %s (user=%s/%s)",
+			user.Id(), rq.Identity.Sub, rq.Identity.Username)
+	} else {
+		c.log.Info().Msgf("Peer connection: %s (anonymous)", user.Id())
+	}
 	w.router.AddUser(user)
 
 	return api.Out{Payload: sdp}

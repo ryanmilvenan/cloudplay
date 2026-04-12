@@ -2,9 +2,12 @@ package coordinator
 
 import "github.com/giongto35/cloud-game/v3/pkg/api"
 
-func (w *Worker) WebrtcInit(id string) (*api.WebrtcInitResponse, error) {
+func (w *Worker) WebrtcInit(id string, identity api.Identity) (*api.WebrtcInitResponse, error) {
 	return api.UnwrapChecked[api.WebrtcInitResponse](
-		w.Send(api.WebrtcInit, api.WebrtcInitRequest{Id: id}))
+		w.Send(api.WebrtcInit, api.WebrtcInitRequest{
+			Stateful: api.Stateful{Id: id},
+			Identity: identity,
+		}))
 }
 
 func (w *Worker) WebrtcAnswer(id string, sdp string) {

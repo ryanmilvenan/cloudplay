@@ -11,7 +11,19 @@ type User struct {
 	Connection
 	w   *Worker // linked worker
 	log *logger.Logger
+	// Identity is populated on WS upgrade in hub.handleUserConnection
+	// from X-Auth-Request-* headers set by oauth2-proxy (or the
+	// chain-claude-test bypass). Zero-value = anonymous.
+	identity api.Identity
 }
+
+// Identity returns the user's verified identity as parsed from the
+// ingress auth headers at WS upgrade time. Callers should treat the
+// zero value (Sub == "") as anonymous.
+func (u *User) Identity() api.Identity { return u.identity }
+
+// SetIdentity is called once by the hub during WS upgrade.
+func (u *User) SetIdentity(id api.Identity) { u.identity = id }
 
 type HasServerInfo interface {
 	GetServerList() []api.Server

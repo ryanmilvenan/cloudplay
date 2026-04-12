@@ -4,6 +4,7 @@ import (
 	"iter"
 	"sync"
 
+	"github.com/giongto35/cloud-game/v3/pkg/api"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/app"
 )
 
@@ -174,6 +175,10 @@ func (p AppSession) Id() SessionKey { return p.uid }
 type GameSession struct {
 	AppSession
 	Index int // track user Index (i.e. player 1,2,3,4 select)
+	// Identity is populated on WebrtcInit from the coordinator. Zero
+	// value (Identity.Sub == "") means the user came through an
+	// unauthenticated ingress path — legal, just no per-user features.
+	Identity api.Identity
 }
 
 func NewGameSession(id string, s Session) *GameSession {

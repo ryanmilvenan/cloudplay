@@ -28,7 +28,7 @@ func (u *User) HandleWebrtcInit(info HasServerInfo) {
 		return
 	}
 	uid := u.Id().String()
-	resp, err := u.w.WebrtcInit(uid)
+	resp, err := u.w.WebrtcInit(uid, u.identity)
 	if err != nil || resp == nil || *resp == api.EMPTY {
 		u.log.Error().Err(err).Msg("malformed WebRTC init response")
 		return

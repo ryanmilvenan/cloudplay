@@ -32,10 +32,8 @@ RUN find ./bin/* | xargs upx --best --lzma
 
 WORKDIR /usr/local/share/cloud-game
 RUN mv ${BUILD_PATH}/bin/* ./ && \
-    mv ${BUILD_PATH}/web ./web && \
     mv ${BUILD_PATH}/LICENSE ./
-RUN ${BUILD_PATH}/scripts/version.sh ./web/index.html ${VERSION} && \
-    ${BUILD_PATH}/scripts/mkdirs.sh
+RUN ${BUILD_PATH}/scripts/mkdirs.sh
 
 # next worker build stage
 FROM build0 AS build_worker

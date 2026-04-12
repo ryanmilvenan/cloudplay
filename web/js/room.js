@@ -55,11 +55,7 @@ export const room = {
     load: () => localStorage.getItem('roomID'),
     getLink: () => window.location.href.split('?')[0] + `?id=${encodeURIComponent(room.id)}`,
     loadMaybe: () => {
-        // localStorage first
-        //roomID = loadRoomID();
         let zone = '';
-
-        // Shared URL second
         const [parsedId, czone] = parseURLForRoom();
         if (parsedId !== null) {
             id = parsedId;

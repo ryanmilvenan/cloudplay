@@ -161,7 +161,6 @@ const module = (mod) => {
         enable: () => ({}),
         ...mod,
         _disable: function () {
-            // mod.val = 0;
             mod.disable && mod.disable();
             mod.mui && mod.mui.clear();
         },

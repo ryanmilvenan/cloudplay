@@ -6,7 +6,7 @@
 import {gui} from 'gui';
 import {KEY, input} from 'input';
 import {log} from 'log';
-import {opts, settings} from 'settings';
+import {settings} from 'settings';
 import {api} from 'api';
 import {webrtc} from 'network';
 

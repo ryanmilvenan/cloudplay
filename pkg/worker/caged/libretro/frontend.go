@@ -77,11 +77,25 @@ type Frontend struct {
 	mu  sync.Mutex
 	mui sync.Mutex
 
+	// gameStartTime is when the current game's main loop began running
+	// (after any save-state restore). Used by Save() to suppress writing
+	// a .dat before the core is stable — PS2 in particular will cheerfully
+	// return true from retro_serialize on an early-boot state that then
+	// SIGABRTs inside retro_unserialize on the next launch. Zero means
+	// "not started yet" and blocks state saves entirely.
+	gameStartTime time.Time
+
 	DisableCanvasPool bool
 	SaveOnClose       bool
 	UniqueSaveDir     bool
 	SaveStateFs       string
 }
+
+// minSaveUptime is the minimum wall-clock time the game must have been
+// running before we'll persist a save state to disk. PS2 BIOS boot is
+// ~10-15s and the game logo/menu add more; 30s covers the common cases
+// without being onerous for autosave (which runs every 15s).
+const minSaveUptime = 30 * time.Second
 
 type Device byte
 
@@ -311,6 +325,11 @@ func (f *Frontend) Start() {
 		}
 	}
 
+	// Mark the start-of-gameplay boundary for the uptime gate in Save().
+	// Anything before this point is considered "still booting" and its
+	// state is not trustworthy enough to persist.
+	f.gameStartTime = time.Now()
+
 	if f.conf.AutosaveSec > 0 {
 		// !to sync both for loops, can crash if the emulator starts later
 		go f.autosave(f.conf.AutosaveSec)
@@ -523,17 +542,30 @@ func (f *Frontend) Save() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// Uptime gate: if the game hasn't been running long enough, a
+	// retro_serialize success isn't trustworthy — PS2 in particular can
+	// return true on an early-boot state that SIGABRTs on the next
+	// retro_unserialize. Skip the state write (but leave any existing
+	// .dat in place — it was presumably valid when a prior session wrote
+	// it) and still save SRAM, which is always safe to persist.
+	gateOpen := !f.gameStartTime.IsZero() && time.Since(f.gameStartTime) >= minSaveUptime
+
 	var saveErr error
-	ss, err := nanoarch.SaveState()
-	if err != nil {
-		// retro_serialize not supported by this core — not fatal, try SRAM.
-		// Remove any stale .dat file so a corrupt state is never loaded next session.
-		stdos.Remove(f.HashPath())
-		saveErr = err
-	} else if err := f.storage.Save(f.HashPath(), ss); err != nil {
-		saveErr = err
+	if gateOpen {
+		ss, err := nanoarch.SaveState()
+		if err != nil {
+			// retro_serialize not supported by this core — not fatal, try SRAM.
+			// Remove any stale .dat file so a corrupt state is never loaded next session.
+			stdos.Remove(f.HashPath())
+			saveErr = err
+		} else if err := f.storage.Save(f.HashPath(), ss); err != nil {
+			saveErr = err
+		}
+		ss = nil
+	} else {
+		f.log.Debug().Msgf("save state skipped: uptime gate (game has been running %v, need %v)",
+			time.Since(f.gameStartTime).Round(time.Second), minSaveUptime)
 	}
-	ss = nil
 
 	if sram := nanoarch.SaveRAM(); sram != nil {
 		if err := f.storage.Save(f.SRAMPath(), sram); err != nil {
@@ -546,17 +578,60 @@ func (f *Frontend) Save() error {
 }
 
 // Load restores the state from the filesystem.
+//
+// Save states are quarantined across the restore call: the file is renamed
+// to <path>.loading before retro_unserialize runs, and back to its original
+// name only after a clean success. Some cores (notably LRPS2/PCSX2) will
+// SIGABRT out of retro_unserialize on a bad state — bypassing Go's error
+// path entirely — so the supervisor's next-launch restart re-attempts the
+// same bad file and crashes again. With quarantine, a stale .loading on
+// entry means "the last load crashed on this file" and we discard it.
 func (f *Frontend) Load() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	ss, err := f.storage.Load(f.HashPath())
+	savePath := f.HashPath()
+	loadingPath := savePath + ".loading"
+
+	// Stale .loading == the previous load attempt crashed the worker.
+	// That file is the corrupt save state we're trying to avoid.
+	if os.Exists(loadingPath) {
+		f.log.Warn().Msgf("discarding quarantined save state from previous crashed load: %v", loadingPath)
+		_ = stdos.Remove(loadingPath)
+		// Defensive: if both exist (shouldn't), clear the base too —
+		// we can't tell which was the bad one.
+		_ = stdos.Remove(savePath)
+	}
+
+	ss, err := f.storage.Load(savePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		f.log.Warn().Err(err).Msg("load save state file failed")
 	}
 	if ss != nil {
+		// Quarantine: move the file aside before attempting the restore.
+		// If the core crashes inside retro_unserialize, the next launch
+		// will find .loading here and delete it.
+		quarantined := false
+		if err := stdos.Rename(savePath, loadingPath); err != nil {
+			f.log.Warn().Err(err).Msgf("failed to quarantine save state at %v before restore", savePath)
+		} else {
+			quarantined = true
+		}
+
 		if err := nanoarch.RestoreSaveState(ss); err != nil {
 			f.log.Warn().Err(err).Msg("restore save state failed, continuing to SRAM")
+			if quarantined {
+				// Known-bad state — drop it so the next launch boots fresh.
+				_ = stdos.Remove(loadingPath)
+			} else {
+				// Couldn't quarantine; remove in place.
+				_ = stdos.Remove(savePath)
+			}
+		} else if quarantined {
+			// Restore succeeded — return the file to its real name.
+			if err := stdos.Rename(loadingPath, savePath); err != nil {
+				f.log.Warn().Err(err).Msg("failed to un-quarantine save state after successful restore")
+			}
 		}
 	}
 

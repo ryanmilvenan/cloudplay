@@ -9,7 +9,7 @@
 # format v2-1-gcafejk (last tag, n commits since, g+HEAD short sha).
 # Override with the VERSION env var if the script can't see a git repo.
 
-version="${VERSION:-$(git describe --abbrev=7 --always --tags 2> /dev/null)}"
+version="${VERSION:-$(git rev-parse --short=7 HEAD 2> /dev/null)}"
 if [ -z "$version" ]; then
   echo "version.sh: cannot derive version (not a git repo; set VERSION=...)" >&2
   exit 1

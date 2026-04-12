@@ -6,18 +6,22 @@ let WEBRTC_STATS_RTT;
 let VIDEO_BITRATE;
 let GET_V_CODEC, SET_CODEC;
 
-const bitrate = (() => {
-    let bytesPrev, timestampPrev;
-    const w = [0, 0, 0, 0, 0, 0];
-    const n = w.length;
-    let i = 0;
+// Rolling mean over a 6-sample window of instantaneous bitrate (bits/s).
+// Returns a function that takes (now, bytes) and returns kb/s.
+const createBitrateSmoother = (windowSize = 6) => {
+    const window = Array(windowSize).fill(0);
+    let prevBytes, prevTime, idx = 0;
     return (now, bytes) => {
-        w[i++ % n] = timestampPrev ? Math.floor(8 * (bytes - bytesPrev) / (now - timestampPrev)) : 0;
-        bytesPrev = bytes;
-        timestampPrev = now;
-        return Math.floor(w.reduce((a, b) => a + b) / n);
+        window[idx++ % windowSize] = prevTime
+            ? Math.floor(8 * (bytes - prevBytes) / (now - prevTime))
+            : 0;
+        prevBytes = bytes;
+        prevTime = now;
+        return Math.floor(window.reduce((a, b) => a + b) / windowSize);
     };
-})();
+};
+
+const bitrate = createBitrateSmoother();
 
 export const initStatsProbes = () => {
     stats.modules = [

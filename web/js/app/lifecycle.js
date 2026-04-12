@@ -88,10 +88,7 @@ export const app = {
             ..._default,
             _uber: true,
             name: 'settings',
-            keyRelease: (() => {
-                settings.ui.onToggle = (o) => !o && setState(store.lastState);
-                return (key) => key === KEY.SETTINGS && settings.ui.toggle();
-            })(),
+            keyRelease: (key) => key === KEY.SETTINGS && settings.ui.toggle(),
             menuReady: showMenuScreen,
         },
 
@@ -211,3 +208,6 @@ export const app = {
 };
 
 setInitialState(app.state.eden);
+
+// Return to the prior state when the settings panel closes.
+settings.ui.onToggle = (open) => { if (!open) setState(store.lastState); };

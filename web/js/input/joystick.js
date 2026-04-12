@@ -8,7 +8,7 @@ import {
     TRIGGER_CHANGED,
 } from 'event';
 import {KEY} from 'input';
-import {getControllerMap} from './controllerMaps.js?v=5';
+import {getControllerMap} from './controllerMaps.js?v=__V__';
 import {log} from 'log';
 
 const deadZone = 0.1;

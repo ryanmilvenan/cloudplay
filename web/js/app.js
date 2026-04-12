@@ -48,16 +48,16 @@ import {input, KEY} from 'input';
 import {socket, webrtc} from 'network';
 import {debounce} from 'utils';
 
-import {gameList} from './gameList.js?v=5';
-import {menu} from './menu.js?v=5';
-import {message} from './message.js?v=5';
-import {overlay} from './overlay.js?v=6';
-import {recording} from './recording.js?v=5';
-import {room} from './room.js?v=5';
-import {screen} from './screen.js?v=5';
-import {stats} from './stats.js?v=5';
-import {stream} from './stream.js?v=5';
-import {workerManager} from "./workerManager.js?v=5";
+import {gameList} from './gameList.js?v=__V__';
+import {menu} from './menu.js?v=__V__';
+import {message} from './message.js?v=__V__';
+import {overlay} from './overlay.js?v=__V__';
+import {recording} from './recording.js?v=__V__';
+import {room} from './room.js?v=__V__';
+import {screen} from './screen.js?v=__V__';
+import {stats} from './stats.js?v=__V__';
+import {stream} from './stream.js?v=__V__';
+import {workerManager} from "./workerManager.js?v=__V__";
 
 settings.init();
 log.level = settings.loadOr(opts.LOG_LEVEL, log.DEFAULT);

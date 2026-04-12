@@ -245,6 +245,9 @@ emulator:
             mupen64plus-rsp-plugin: cxd4
             mupen64plus-cpucore: dynamic_recompiler
             mupen64plus-pak1: memory
+            mupen64plus-pak2: memory
+            mupen64plus-pak3: memory
+            mupen64plus-pak4: memory
             mupen64plus-astick-sensitivity: '100'
         dos:
           lib: dosbox_pure_libretro

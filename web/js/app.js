@@ -59,6 +59,8 @@ import {stats} from './stats.js?v=__V__';
 import {stream} from './stream.js?v=__V__';
 import {workerManager} from "./workerManager.js?v=__V__";
 
+import {handleRumble} from './app/rumble.js?v=__V__';
+
 settings.init();
 log.level = settings.loadOr(opts.LOG_LEVEL, log.DEFAULT);
 
@@ -355,37 +357,6 @@ slotPickerBtns.forEach(btn => {
 });
 
 // ── Message handling ──
-
-// Rumble/haptic feedback via Gamepad Vibration API.
-// Track both motors and combine into a single playEffect call,
-// since each playEffect replaces the previous one.
-const rumbleState = [{strong: 0, weak: 0, timer: null},
-                     {strong: 0, weak: 0, timer: null},
-                     {strong: 0, weak: 0, timer: null},
-                     {strong: 0, weak: 0, timer: null}];
-
-const applyRumble = (port) => {
-    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-    const gp = gamepads[port];
-    if (!gp || !gp.vibrationActuator) return;
-    const s = rumbleState[port];
-    gp.vibrationActuator.playEffect('dual-rumble', {
-        duration: 150,
-        strongMagnitude: s.strong,
-        weakMagnitude: s.weak,
-    }).catch(() => {});
-};
-
-const handleRumble = (port, effect, strength) => {
-    if (port >= rumbleState.length) return;
-    const s = rumbleState[port];
-    const intensity = strength / 0xFFFF;
-    if (effect === 0) s.strong = intensity;
-    else s.weak = intensity;
-    // Debounce: wait 5ms for the paired motor update before applying
-    if (s.timer) clearTimeout(s.timer);
-    s.timer = setTimeout(() => { s.timer = null; applyRumble(port); }, 5);
-};
 
 const onMessage = (m) => {
     const {id, t, p: payload} = m;

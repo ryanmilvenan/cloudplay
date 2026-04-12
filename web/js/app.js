@@ -49,7 +49,6 @@ import {socket, webrtc} from 'network';
 import {debounce} from 'utils';
 
 import {gameList} from './gameList.js?v=5';
-import {gameListNew} from './gameListNew.js?v=5';
 import {menu} from './menu.js?v=5';
 import {message} from './message.js?v=5';
 import {overlay} from './overlay.js?v=6';
@@ -130,7 +129,7 @@ const activeGameTitle = (preferRoom = false) => {
     if (preferRoom) {
         return parseGameNameFromRoomId(room.id) || 'Current Session';
     }
-    const game = gameListNew.selectedGame;
+    const game = gameList.selectedGame;
     if (game) {
         return game.alias || game.title;
     }
@@ -177,14 +176,14 @@ const showMenuScreen = () => {
     overlay.disable();
 
     // Use new game list UI
-    gameListNew.show();
+    gameList.show();
     screen.toggle(menu);
 
     setState(app.state.menu);
 };
 
 // Wire up new game list start callback
-gameListNew.onStart = () => startGame();
+gameList.onStart = () => startGame();
 
 const armSharedSessionFallback = () => {
     clearTimeout(sharedSessionFallbackTimer);
@@ -232,11 +231,11 @@ const startGame = () => {
     setState(app.state.game);
 
     // Hide game list, show stream
-    gameListNew.hide();
+    gameList.hide();
     screen.toggle(stream);
 
     const joiningSharedSession = !!room.id;
-    const selectedTitle = gameListNew.selected || gameList.selected || parseGameNameFromRoomId(room.id);
+    const selectedTitle = gameList.selected || parseGameNameFromRoomId(room.id);
 
     api.game.start(
         selectedTitle,
@@ -247,7 +246,6 @@ const startGame = () => {
     )
 
     gameList.disable();
-    gameListNew.disable();
 
     // Set controller map for this system before enabling retropad.
     // When joining a shared session the user never selected a game, so
@@ -255,8 +253,8 @@ const startGame = () => {
     // roomId. Without this, the joining player keeps the default map and
     // can lose the correct analog layout.
     const game = joiningSharedSession
-        ? gameListNew.findByTitle(parseGameNameFromRoomId(room.id))
-        : gameListNew.selectedGame;
+        ? gameList.findByTitle(parseGameNameFromRoomId(room.id))
+        : gameList.selectedGame;
     if (game && game.system) {
         input.joystick.setSystem(game.system);
     }
@@ -341,7 +339,6 @@ const resetToMenu = ({reconnect = false} = {}) => {
     input.retropad.toggle(false);
     room.reset();
     gameList.disable();
-    gameListNew.disable();
     showMenuScreen();
     if (reconnect) {
         api.server.initWebrtc();
@@ -572,7 +569,6 @@ const app = {
             axisChanged: (id, val) => {
                 // Drive new game list with gamepad axis
                 if (id === 1) {
-                    gameListNew.scroll(val < -.5 ? -1 : val > .5 ? 1 : 0);
                     gameList.scroll(val < -.5 ? -1 : val > .5 ? 1 : 0);
                 }
             },
@@ -580,7 +576,6 @@ const app = {
                 switch (key) {
                     case KEY.UP:
                     case KEY.DOWN:
-                        gameListNew.scroll(key === KEY.UP ? -1 : 1);
                         gameList.scroll(key === KEY.UP ? -1 : 1);
                         break;
                 }
@@ -589,7 +584,6 @@ const app = {
                 switch (key) {
                     case KEY.UP:
                     case KEY.DOWN:
-                        gameListNew.scroll(0);
                         gameList.scroll(0);
                         break;
                     case KEY.JOIN:
@@ -744,7 +738,6 @@ sub(WEBRTC_NEW_CONNECTION, (data) => {
     api.server.initWebrtc()
     // Set games immediately — show menu without waiting for WebRTC
     gameList.set(data.games);
-    gameListNew.set(data.games);
     // Show the game list as soon as we have the game data
     if (!data.roomId && (state === app.state.eden || state === app.state.menu)) {
         showMenuScreen();

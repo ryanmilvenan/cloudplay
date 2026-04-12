@@ -1,255 +1,170 @@
-import {MENU_PRESSED, MENU_RELEASED, sub} from 'event';
-import {gui} from 'gui';
+/**
+ * New game list UI — full-screen dark scrollable list.
+ *
+ * Renders into #game-list-container. Supports keyboard (arrow up/down + Enter)
+ * and gamepad navigation (via the existing scroll/select interface).
+ */
 
-const TOP_POSITION = 102
-const SELECT_THRESHOLD_MS = 160
+const containerEl = document.getElementById('game-list-container');
+const screenEl = document.getElementById('game-list-screen');
 
-const games = (() => {
-    let list = [], index = 0
-    return {
-        get index() {
-            return index
-        },
-        get list() {
-            return list
-        },
-        get selected() {
-            return list[index].title // selected by the game title, oof
-        },
-        set index(i) {
-            index = i < -1 ? i = 0 :
-                i > list.length ? i = list.length - 1 :
-                    (i % list.length + list.length) % list.length
-        },
-        set: (data = []) => list = data.sort((a, b) => a.title.toLowerCase() > b.title.toLowerCase() ? 1 : -1),
-        empty: () => list.length === 0
+let games = [];
+// selectedIndex is the index into `games` (alphabetical order) — it
+// identifies the actual game that will launch on Enter/click.
+let selectedIndex = 0;
+// visualOrder is a flat list of `games` indices in the order they appear
+// in the DOM (system-grouped, system labels sorted alphabetically). It is
+// rebuilt by render() and is what arrow-key / gamepad navigation walks.
+// Without this, pressing Down jumps by alphabetical neighbour instead of
+// visual neighbour, so the highlight and the launched game disagree.
+let visualOrder = [];
+let onStart = () => {};
+
+const systemLabel = (system = '') => {
+    const labels = {
+        gc: 'GameCube',
+        wii: 'Wii',
+        dreamcast: 'Dreamcast',
+        snes: 'SNES',
+        nes: 'NES',
+        gba: 'Game Boy Advance',
+        pcsx: 'PlayStation',
+        ps2: 'PlayStation 2',
+        n64: 'Nintendo 64',
+        mame: 'Arcade',
+        dos: 'DOS',
+    };
+    return labels[system] || (system ? system.toUpperCase() : 'Other');
+};
+
+const groupedGames = () => {
+    const groups = new Map();
+    games.forEach((game, index) => {
+        const key = game.system || 'other';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push({ game, index });
+    });
+    return [...groups.entries()].sort((a, b) => systemLabel(a[0]).localeCompare(systemLabel(b[0])));
+};
+
+const render = () => {
+    containerEl.innerHTML = '';
+    visualOrder = [];
+
+    groupedGames().forEach(([system, entries]) => {
+        const sectionEl = document.createElement('section');
+        sectionEl.className = 'game-system-card';
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'game-system-card__header';
+        headerEl.innerHTML =
+            `<div class="game-system-card__title">${systemLabel(system)}</div>` +
+            `<div class="game-system-card__count">${entries.length} game${entries.length === 1 ? '' : 's'}</div>`;
+        sectionEl.appendChild(headerEl);
+
+        const listEl = document.createElement('div');
+        listEl.className = 'game-system-card__list';
+
+        entries.forEach(({ game, index }) => {
+            visualOrder.push(index);
+            const el = document.createElement('div');
+            el.className = 'game-list-item' + (index === selectedIndex ? ' selected' : '');
+            el.dataset.index = String(index);
+            el.innerHTML =
+                `<div class="game-list-item__title">${game.alias || game.title}</div>` +
+                `<div class="game-list-item__system">${systemLabel(game.system)}</div>`;
+            el.addEventListener('click', () => {
+                select(index);
+                onStart();
+            });
+            listEl.appendChild(el);
+        });
+
+        sectionEl.appendChild(listEl);
+        containerEl.appendChild(sectionEl);
+    });
+
+    scrollIntoView();
+};
+
+// select takes a data index (position in the alphabetically-sorted `games`
+// array) and applies `.selected` to the DOM node whose dataset.index
+// matches — NOT to the DOM node at position `selectedIndex`, because the
+// DOM is rendered in system-grouped order and the two numberings disagree.
+const select = (index) => {
+    if (games.length === 0) return;
+    selectedIndex = ((index % games.length) + games.length) % games.length;
+    const items = containerEl.querySelectorAll('.game-list-item');
+    items.forEach(el => el.classList.toggle('selected', Number(el.dataset.index) === selectedIndex));
+    scrollIntoView();
+};
+
+const scrollIntoView = () => {
+    const el = containerEl.querySelector(`.game-list-item[data-index="${selectedIndex}"]`);
+    if (el) {
+        el.scrollIntoView({block: 'nearest', behavior: 'smooth'});
     }
-})()
-
-const scroll = ((DEFAULT_INTERVAL) => {
-    const state = {
-        IDLE: 0, UP: -1, DOWN: 1, DRAG: 3
-    }
-    let last = state.IDLE
-    let _si
-    let onShift, onStop
-
-    const shift = (delta) => {
-        if (scroll.scrolling) return
-        onShift(delta)
-        // velocity?
-        // keep rolling the game list if the button is pressed
-        _si = setInterval(() => onShift(delta), DEFAULT_INTERVAL)
-    }
-
-    const stop = () => {
-        onStop()
-        _si && (clearInterval(_si) && (_si = null))
-    }
-
-    const handle = {[state.IDLE]: stop, [state.UP]: shift, [state.DOWN]: shift, [state.DRAG]: null}
-
-    return {
-        scroll: (move = state.IDLE) => {
-            handle[move] && handle[move](move)
-            last = move
-        },
-        get scrolling() {
-            return last !== state.IDLE
-        },
-        set onShift(fn) {
-            onShift = fn
-        },
-        set onStop(fn) {
-            onStop = fn
-        },
-        state,
-        last: () => last
-    }
-})(SELECT_THRESHOLD_MS)
-
-const ui = (() => {
-    const rootEl = document.getElementById('menu-container')
-    const choiceMarkerEl = document.getElementById('menu-item-choice')
-
-    const TRANSITION_DEFAULT = `top ${SELECT_THRESHOLD_MS}ms`
-    let listTopPos = TOP_POSITION
-
-    rootEl.style.transition = TRANSITION_DEFAULT
-
-    let onTransitionEnd = () => ({})
-
-    let items = []
-
-    const marque = (() => {
-        const speed = 1
-        const sep = ' '.repeat(10)
-
-        let el = null
-        let raf = 0
-        let txt = null
-        let w = 0
-
-        const move = () => {
-            const shift = parseFloat(getComputedStyle(el).left) - speed
-            el.style.left = w + shift < 1 ? `0px` : `${shift}px`
-            raf = requestAnimationFrame(move)
-        }
-
-        return {
-            reset() {
-                cancelAnimationFrame(raf)
-                el && (el.style.left = `0px`)
-            },
-            enable(cap) {
-                txt && (el.textContent = txt) // restore the text
-                el = cap
-                txt = el.textContent
-                el.textContent += sep
-                w = el.scrollWidth // keep the text width
-                el.textContent += txt
-                cancelAnimationFrame(raf)
-                raf = requestAnimationFrame(move)
-            }
-        }
-    })()
-
-    const item = (parent) => {
-        const title = parent.firstChild.firstChild
-        const desc = parent.children[1]
-
-        const _desc = {
-            hide: () => gui.hide(desc),
-            show: async () => {
-                gui.show(desc)
-                await gui.anim.fadeIn(desc, .054321)
-            },
-        }
-
-        const isOverflown = () => title.scrollWidth > title.clientWidth
-
-        const _title = {
-            pick: () => {
-                title.classList.add('pick')
-                isOverflown() && marque.enable(title)
-            },
-            reset: () => {
-                title.classList.remove('pick')
-                isOverflown() && marque.reset()
-            }
-        }
-
-        const clear = () => _title.reset()
-
-        return {
-            get description() {
-                return _desc
-            },
-            get title() {
-                return _title
-            },
-            clear,
-        }
-    }
-
-    const render = () => {
-        rootEl.innerHTML = games.list.map(game =>
-            `<div class="menu-item">` +
-            `<div><span>${game.alias ? game.alias : game.title}</span></div>` +
-            `<div class="menu-item__info">${game.system}</div>` +
-            `</div>`)
-            .join('')
-        items = [...rootEl.querySelectorAll('.menu-item')].map(x => item(x))
-    }
-
-    return {
-        get items() {
-            return items
-        },
-        get selected() {
-            return items[games.index]
-        },
-        get roundIndex() {
-            const closest = Math.round((listTopPos - TOP_POSITION) / -36)
-            return closest < 0 ? 0 :
-                closest > games.list.length - 1 ? games.list.length - 1 :
-                    closest // don't wrap the list on drag
-        },
-        set onTransitionEnd(x) {
-            onTransitionEnd = x
-        },
-        set pos(idx) {
-            listTopPos = TOP_POSITION - idx * 36
-            rootEl.style.top = `${listTopPos}px`
-        },
-        drag: {
-            startPos: (pos) => {
-                rootEl.style.top = `${listTopPos - pos}px`
-                rootEl.style.transition = ''
-            },
-            stopPos: (pos) => {
-                listTopPos -= pos
-                rootEl.style.transition = TRANSITION_DEFAULT
-            },
-        },
-        render,
-        marker: {
-            show: () => gui.show(choiceMarkerEl)
-        },
-        NO_TRANSITION: onTransitionEnd(),
-    }
-})(TOP_POSITION, SELECT_THRESHOLD_MS, games)
+};
 
 const show = () => {
-    ui.render()
-    ui.marker.show() // we show square pseudo-selection marker only after rendering
-    scroll.scroll(scroll.state.DOWN) // interactively moves games select down
-    scroll.scroll(scroll.state.IDLE)
-}
+    screenEl.style.display = '';
+    if (games.length > 0) render();
+};
 
-const select = (index) => {
-    ui.items.forEach(i => i.clear()) // !to rewrite
-    games.index = index
-    ui.pos = games.index
-}
+const hide = () => {
+    screenEl.style.display = 'none';
+};
 
-scroll.onShift = (delta) => select(games.index + delta)
+// Scroll interface compatible with existing gamepad axis handling
+// direction: -1 (up), 1 (down), 0 (stop)
+let scrollInterval = null;
+const SCROLL_INTERVAL_MS = 180;
 
-scroll.onStop = () => {
-    const item = ui.selected
-    item && item.title.pick()
-}
+// stepVisual moves the selection by `direction` steps through the
+// visual (system-grouped) order the user actually sees on screen.
+const stepVisual = (direction) => {
+    if (visualOrder.length === 0) return;
+    const currentVisualPos = visualOrder.indexOf(selectedIndex);
+    // If selectedIndex isn't in visualOrder for some reason, start at 0.
+    const basePos = currentVisualPos < 0 ? 0 : currentVisualPos;
+    const nextVisualPos = ((basePos + direction) % visualOrder.length + visualOrder.length) % visualOrder.length;
+    select(visualOrder[nextVisualPos]);
+};
 
-sub(MENU_PRESSED, (position) => {
-    if (games.empty()) return
-    ui.onTransitionEnd = ui.NO_TRANSITION
-    scroll.scroll(scroll.state.DRAG)
-    ui.selected && ui.selected.clear()
-    ui.drag.startPos(position)
-})
+const scroll = (direction) => {
+    clearInterval(scrollInterval);
+    if (direction === 0) return;
+    stepVisual(direction);
+    scrollInterval = setInterval(() => stepVisual(direction), SCROLL_INTERVAL_MS);
+};
 
-sub(MENU_RELEASED, (position) => {
-    if (games.empty()) return
-    ui.drag.stopPos(position)
-    select(ui.roundIndex)
-    scroll.scroll(scroll.state.IDLE)
-})
-
-/**
- * Game list module.
- */
 export const gameList = {
-    disable: () => ui.selected?.clear(),
-    scroll: (x) => {
-        if (games.empty()) return
-        scroll.scroll(x)
+    set: (data = []) => {
+        games = data.sort((a, b) =>
+            a.title.toLowerCase() > b.title.toLowerCase() ? 1 : -1
+        );
+        screenEl.classList.remove('loading');
+        if (games.length > 0) render();
     },
     get selected() {
-        return games.selected
+        return games.length > 0 ? games[selectedIndex].title : '';
     },
-    set: games.set,
-    show: () => {
-        if (games.empty()) return
-        show()
+    get selectedGame() {
+        return games.length > 0 ? games[selectedIndex] : null;
     },
-}
+    show,
+    hide,
+    render,
+    scroll,
+    select,
+    disable: () => {
+        clearInterval(scrollInterval);
+    },
+    set onStart(fn) { onStart = fn; },
+    get isEmpty() { return games.length === 0; },
+    findByTitle: (title) => {
+        if (!title) return null;
+        const lower = title.toLowerCase();
+        return games.find(g => g.title.toLowerCase() === lower) || null;
+    },
+};

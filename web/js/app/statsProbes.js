@@ -1,6 +1,7 @@
-import {stats} from 'stats';
 import {webrtc} from 'network';
 import {APP_VIDEO_CHANGED, sub} from 'event';
+
+import {stats} from '../stats.js?v=__V__';
 
 let WEBRTC_STATS_RTT;
 let VIDEO_BITRATE;

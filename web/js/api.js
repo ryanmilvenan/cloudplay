@@ -18,6 +18,11 @@ const endpoints = {
     GAME_RESET: 113,
 
     APP_VIDEO_CHANGE: 150,
+
+    // Worker→client broadcast: current room roster (user id, slot,
+    // identity for each connected peer). Fires on StartGame,
+    // ChangePlayer, and peer disconnect. Snapshot, not delta.
+    ROOM_MEMBERS: 207,
 }
 
 let transport = {

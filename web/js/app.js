@@ -29,6 +29,7 @@ import {
     RECORDING_STATUS_CHANGED,
     RECORDING_TOGGLED,
     REFRESH_INPUT,
+    ROOM_MEMBERS_CHANGED,
     SETTINGS_CHANGED,
     WEBRTC_CONNECTION_CLOSED,
     WEBRTC_CONNECTION_READY,
@@ -51,7 +52,7 @@ import {gameList} from './gameList.js?v=5';
 import {gameListNew} from './gameListNew.js?v=5';
 import {menu} from './menu.js?v=5';
 import {message} from './message.js?v=5';
-import {overlay} from './overlay.js?v=5';
+import {overlay} from './overlay.js?v=6';
 import {recording} from './recording.js?v=5';
 import {room} from './room.js?v=5';
 import {screen} from './screen.js?v=5';
@@ -275,6 +276,13 @@ const loadGame = debounce(() => api.game.load(), 1000);
 
 // ── Overlay callbacks ──
 
+// Re-publish roster snapshots from the worker into the overlay. The
+// overlay stacks one avatar per room member on its assigned slot
+// button and flips the ●/○ indicator accordingly, so the picker
+// reflects who's in each slot in real time (both for the local user
+// and everyone else in the room).
+sub(ROOM_MEMBERS_CHANGED, (members) => overlay.setRoomMembers(members));
+
 overlay.onSlotChange = (slot) => {
     updatePlayerIndex(slot);
 };
@@ -430,6 +438,13 @@ const onMessage = (m) => {
             break;
         case api.endpoint.APP_VIDEO_CHANGE:
             pub(APP_VIDEO_CHANGED, {...payload})
+            break;
+        case api.endpoint.ROOM_MEMBERS:
+            // Full-roster snapshot from the worker. Payload shape:
+            // { members: [{ user_id, slot, identity: {...} }, ...] }
+            // Re-published as an event so overlay (and anyone else
+            // that cares) can react without touching app.js again.
+            pub(ROOM_MEMBERS_CHANGED, payload?.members || [])
             break;
     }
 }

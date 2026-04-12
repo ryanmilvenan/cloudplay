@@ -59,6 +59,7 @@ export const GAME_SAVED = 'gameSaved';
 export const GAME_PLAYER_IDX = 'gamePlayerIndex';
 export const GAME_PLAYER_IDX_SET = 'gamePlayerIndexSet'
 export const GAME_ERROR_NO_FREE_SLOTS = 'gameNoFreeSlots'
+export const ROOM_MEMBERS_CHANGED = 'roomMembersChanged';
 
 export const WEBRTC_CONNECTION_CLOSED = 'webrtcConnectionClosed';
 export const WEBRTC_CONNECTION_READY = 'webrtcConnectionReady';

@@ -299,6 +299,12 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 
 	c.RegisterRoom(r.Id())
 
+	// Broadcast updated roster so every connected peer (including the
+	// newly-joined one) sees the current slot/identity for everyone in
+	// the room. Called after OnMessage install so the new peer can
+	// actually receive the broadcast on its data channel.
+	c.broadcastRoomMembers(w, r)
+
 	response := api.StartGameResponse{
 		Room:    api.Room{Rid: r.Id()},
 		Record:  w.conf.Recording.Enabled,
@@ -318,7 +324,39 @@ func (c *coordinator) HandleTerminateSession(rq api.TerminateSessionRequest, w *
 		w.router.Remove(user)
 		c.log.Debug().Msgf(">>> users: %v", w.router.Users())
 		user.Disconnect()
+		if r := w.router.Room(); r != nil {
+			c.broadcastRoomMembers(w, r)
+		}
 	}
+}
+
+// broadcastRoomMembers sends the current room roster (each user's id,
+// slot, and identity) to every peer connected to the worker. Called on
+// membership and slot-assignment mutations so clients can keep the
+// slot-picker UI (profile avatars, occupied-dot indicators) in sync
+// with reality in real time.
+//
+// Snapshot, not delta — the payload is the full member list so
+// late-joining clients and clients that missed a prior broadcast can
+// reconcile without special-case replay logic.
+func (c *coordinator) broadcastRoomMembers(w *Worker, r *room.Room[*room.GameSession]) {
+	members := make([]api.RoomMember, 0, 8)
+	for u := range w.router.Users().Values() {
+		members = append(members, api.RoomMember{
+			UserId:   u.Id().String(),
+			Slot:     u.Index,
+			Identity: u.Identity,
+		})
+	}
+	data, err := api.Wrap(api.Out{
+		T:       uint8(api.RoomMembers),
+		Payload: api.RoomMembersResponse{Members: members},
+	})
+	if err != nil {
+		c.log.Warn().Err(err).Msg("roommembers wrap failed")
+		return
+	}
+	r.Send(data)
 }
 
 // HandleQuitGame handles cases when a user manually exits the game.
@@ -365,11 +403,13 @@ func (c *coordinator) HandleLoadGame(rq api.LoadGameRequest, w *Worker) api.Out 
 
 func (c *coordinator) HandleChangePlayer(rq api.ChangePlayerRequest, w *Worker) api.Out {
 	user := w.router.FindUser(rq.Id)
-	if user == nil || w.router.FindRoom(rq.Rid) == nil {
+	r := w.router.FindRoom(rq.Rid)
+	if user == nil || r == nil {
 		return api.Out{Payload: -1} // semi-predicates
 	}
 	user.Index = rq.Index
 	w.log.Info().Msgf("Updated player index to: %d", rq.Index)
+	c.broadcastRoomMembers(w, r)
 	return api.Out{Payload: rq.Index}
 }
 

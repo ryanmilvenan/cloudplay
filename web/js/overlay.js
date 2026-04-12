@@ -81,11 +81,79 @@ const setCurrentSlot = (idx) => {
     if (isOpen) updateSlots();
 };
 
+// roomMembers is the last roster broadcast received from the worker.
+// Structure: [{ user_id, slot, identity: { sub, username, picture, ... } }, ...]
+// Multiple members can share a slot (free-form assignment is intentional).
+let roomMembers = [];
+
+// Deterministic background colour from a subject string so the same user
+// gets the same avatar colour across sessions and across all clients.
+// 8 hand-picked hues with enough separation to be distinguishable next
+// to each other when stacked in a single slot.
+const avatarColors = [
+    '#e74c3c', '#3498db', '#2ecc71', '#9b59b6',
+    '#f39c12', '#1abc9c', '#e67e22', '#8e44ad',
+];
+const colourFor = (sub) => {
+    if (!sub) return avatarColors[0];
+    let h = 0;
+    for (let i = 0; i < sub.length; i++) h = (h * 31 + sub.charCodeAt(i)) | 0;
+    return avatarColors[Math.abs(h) % avatarColors.length];
+};
+
+// Render a single avatar element for one room member.
+const makeAvatar = (member) => {
+    const el = document.createElement('span');
+    el.className = 'slot-avatar';
+    el.title = member.identity?.username || member.identity?.email || 'anonymous';
+    const pic = member.identity?.picture;
+    if (pic) {
+        el.style.backgroundImage = `url(${pic})`;
+        el.classList.add('slot-avatar--img');
+    } else {
+        const sub = member.identity?.sub || member.user_id || '';
+        const label = (member.identity?.username || sub || '?').trim().charAt(0).toUpperCase() || '?';
+        el.textContent = label;
+        el.style.backgroundColor = colourFor(sub);
+    }
+    return el;
+};
+
 const updateSlots = () => {
+    // Bucket members by slot so each slot button can stack its occupants.
+    const bySlot = new Map();
+    for (const m of roomMembers) {
+        if (!bySlot.has(m.slot)) bySlot.set(m.slot, []);
+        bySlot.get(m.slot).push(m);
+    }
     slotButtons.forEach(btn => {
         const slot = +btn.dataset.slot;
+        const occupants = bySlot.get(slot) || [];
         btn.classList.toggle('is-current', slot === currentSlot);
+        btn.classList.toggle('is-occupied', occupants.length > 0);
+
+        // Replace (not append) the avatar stack so we don't accumulate
+        // on repeat renders. Avatars live before .slot-label in DOM.
+        let stack = btn.querySelector('.slot-avatars');
+        if (!stack) {
+            stack = document.createElement('span');
+            stack.className = 'slot-avatars';
+            btn.insertBefore(stack, btn.firstChild);
+        }
+        stack.replaceChildren(...occupants.map(makeAvatar));
+
+        // Flip the ○/● indicator that lives in .slot-status to reflect
+        // occupancy. Kept alongside the avatar stack so the slot shows
+        // as "claimed" even when the avatar URL hasn't loaded yet.
+        const status = btn.querySelector('.slot-status');
+        if (status) status.textContent = occupants.length > 0 ? '●' : '○';
     });
+};
+
+// Public: called by app.js when the worker broadcasts a new roster.
+const setRoomMembers = (members) => {
+    roomMembers = Array.isArray(members) ? members : [];
+    updateSlots();
 };
 
 // ── Desktop mouse-move overlay bar ──
@@ -175,6 +243,7 @@ export const overlay = {
     get isOpen() { return isOpen; },
     setGameTitle,
     setCurrentSlot,
+    setRoomMembers,
 
     set onSlotChange(fn) { onSlotChange = fn; },
     set onInvite(fn) { onInvite = fn; },

@@ -75,4 +75,20 @@ type (
 	PrevSessionInfo struct {
 		List []string
 	}
+
+	// RoomMember is one occupant of the current game room.
+	// Multiple members can share a slot (free-form slot assignment is
+	// an intentional product feature — two people on slot 1 is legal).
+	RoomMember struct {
+		UserId   string   `json:"user_id"` // GameSession id (coordinator uid)
+		Slot     int      `json:"slot"`    // 0-based player index
+		Identity Identity `json:"identity"`
+	}
+
+	// RoomMembersResponse is broadcast to every connected peer when
+	// room membership changes (user connects/disconnects) or when any
+	// user's slot assignment changes. Snapshot, not a delta.
+	RoomMembersResponse struct {
+		Members []RoomMember `json:"members"`
+	}
 )

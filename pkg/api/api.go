@@ -89,6 +89,10 @@ const (
 	AppVideoChange   PT = 150
 	LibNewGameList   PT = 205
 	PrevSessions     PT = 206
+	// RoomMembers: worker→client broadcast, sent whenever room
+	// membership or slot assignment changes. Payload is a
+	// RoomMembersResponse with the full snapshot (not a delta).
+	RoomMembers      PT = 207
 )
 
 func (p PT) String() string {
@@ -135,6 +139,8 @@ func (p PT) String() string {
 		return "LibNewGameList"
 	case PrevSessions:
 		return "PrevSessions"
+	case RoomMembers:
+		return "RoomMembers"
 	default:
 		return "Unknown"
 	}

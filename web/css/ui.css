@@ -133,8 +133,53 @@
     color: #fff;
 }
 
-.overlay-player-slot.taken .slot-status {
+.overlay-player-slot.taken .slot-status,
+.overlay-player-slot.is-occupied .slot-status {
     color: #4ade80;
+}
+
+.overlay-player-slot.is-current {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.35);
+    color: #fff;
+}
+
+/* Stack of small circular user avatars inside a slot button. Two or
+ * more avatars overlap slightly to signal shared occupancy; new ones
+ * ride on top from the right.
+ */
+.slot-avatars {
+    display: inline-flex;
+    flex-direction: row;
+    min-height: 24px;
+    align-items: center;
+    justify-content: center;
+}
+
+.slot-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    border: 1.5px solid rgba(0,0,0,0.35);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.15);
+    background-size: cover;
+    background-position: center;
+    line-height: 1;
+    user-select: none;
+}
+
+.slot-avatar + .slot-avatar {
+    margin-left: -6px;
+}
+
+.slot-avatar--img {
+    color: transparent; /* hide fallback letter once image is visible */
 }
 
 .slot-label {

@@ -3,7 +3,12 @@
  *
  * Manages the in-game overlay panel (desktop mouse-idle + mobile cog),
  * the desktop hover bar, player slot display, and overlay actions.
+ *
+ * Slot + roster state lives in state.js; this module subscribes to
+ * rerender when either changes.
  */
+
+import {getState, subscribe} from 'state';
 
 const panelEl = document.getElementById('overlay-panel');
 const cogEl = document.getElementById('overlay-cog');
@@ -19,7 +24,6 @@ const leaveBtn = document.getElementById('overlay-leave');
 
 let backdropEl = null;
 
-let currentSlot = 0;
 let isOpen = false;
 let enabled = false; // only active in game state
 
@@ -76,16 +80,6 @@ const setGameTitle = (title) => {
     gameTitleEl.textContent = title || '—';
 };
 
-const setCurrentSlot = (idx) => {
-    currentSlot = idx;
-    if (isOpen) updateSlots();
-};
-
-// roomMembers is the last roster broadcast received from the worker.
-// Structure: [{ user_id, slot, identity: { sub, username, picture, ... } }, ...]
-// Multiple members can share a slot (free-form assignment is intentional).
-let roomMembers = [];
-
 // Deterministic background colour from a subject string so the same user
 // gets the same avatar colour across sessions and across all clients.
 // 8 hand-picked hues with enough separation to be distinguishable next
@@ -120,6 +114,7 @@ const makeAvatar = (member) => {
 };
 
 const updateSlots = () => {
+    const {currentSlot, roomMembers} = getState();
     // Bucket members by slot so each slot button can stack its occupants.
     const bySlot = new Map();
     for (const m of roomMembers) {
@@ -150,11 +145,9 @@ const updateSlots = () => {
     });
 };
 
-// Public: called by app.js when the worker broadcasts a new roster.
-const setRoomMembers = (members) => {
-    roomMembers = Array.isArray(members) ? members : [];
-    updateSlots();
-};
+// Re-render whenever currentSlot or roomMembers changes in the store.
+// We're coarse on purpose — updateSlots is idempotent and cheap.
+subscribe(() => { if (isOpen || enabled) updateSlots(); });
 
 // ── Desktop mouse-move overlay bar ──
 // We reuse the cog/panel approach but auto-show on mouse move on desktop
@@ -242,8 +235,6 @@ export const overlay = {
     toggle,
     get isOpen() { return isOpen; },
     setGameTitle,
-    setCurrentSlot,
-    setRoomMembers,
 
     set onSlotChange(fn) { onSlotChange = fn; },
     set onInvite(fn) { onInvite = fn; },

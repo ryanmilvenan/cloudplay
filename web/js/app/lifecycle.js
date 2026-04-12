@@ -18,15 +18,22 @@ import {room} from '../room.js?v=__V__';
 import {screen} from '../screen.js?v=__V__';
 import {stats} from '../stats.js?v=__V__';
 
-import {store, setState, setInitialState} from './state.js?v=__V__';
+import {getState, setAppState, setInitialAppState} from 'state';
 import {keyButtons, handleToggle} from './keys.js?v=__V__';
 import {startGame, saveGame, loadGame, updatePlayerIndex} from './session.js?v=__V__';
 
 const SHARED_SESSION_FALLBACK_MS = 20000;
 
+// Lifecycle-local — no other module reads or writes this.
+let sharedSessionFallbackTimer = null;
+
+export const cancelSharedSessionFallback = () => {
+    clearTimeout(sharedSessionFallbackTimer);
+    sharedSessionFallbackTimer = null;
+};
+
 export const showMenuScreen = () => {
-    clearTimeout(store.sharedSessionFallbackTimer);
-    store.sharedSessionFallbackTimer = null;
+    cancelSharedSessionFallback();
     log.debug('[control] loading menu screen');
 
     gui.hide(keyButtons[KEY.SAVE]);
@@ -37,17 +44,16 @@ export const showMenuScreen = () => {
     gameList.show();
     screen.toggle(menu);
 
-    setState(app.state.menu);
+    setAppState(app.state.menu);
 };
 
 export const armSharedSessionFallback = () => {
-    clearTimeout(store.sharedSessionFallbackTimer);
-    store.sharedSessionFallbackTimer = null;
+    cancelSharedSessionFallback();
 
     if (!room.id) return;
 
-    store.sharedSessionFallbackTimer = setTimeout(() => {
-        if (!room.id || store.state === app.state.game || webrtc.isInputReady()) return;
+    sharedSessionFallbackTimer = setTimeout(() => {
+        if (!room.id || getState().appState === app.state.game || webrtc.isInputReady()) return;
 
         log.warn(`[control] shared session attach timed out after ${SHARED_SESSION_FALLBACK_MS}ms; falling back to game list`);
         room.reset();
@@ -57,13 +63,12 @@ export const armSharedSessionFallback = () => {
 };
 
 export const onConnectionReady = () => {
-    clearTimeout(store.sharedSessionFallbackTimer);
-    store.sharedSessionFallbackTimer = null;
+    cancelSharedSessionFallback();
     if (room.id) {
         message.show('Joining current session...');
         startGame();
     } else {
-        store.state.menuReady();
+        getState().appState.menuReady();
     }
 };
 
@@ -91,6 +96,7 @@ export const app = {
             keyRelease: (key) => key === KEY.SETTINGS && settings.ui.toggle(),
             menuReady: showMenuScreen,
         },
+
 
         menu: {
             ..._default,
@@ -207,7 +213,7 @@ export const app = {
     },
 };
 
-setInitialState(app.state.eden);
+setInitialAppState(app.state.eden);
 
 // Return to the prior state when the settings panel closes.
-settings.ui.onToggle = (open) => { if (!open) setState(store.lastState); };
+settings.ui.onToggle = (open) => { if (!open) setAppState(getState().lastAppState); };

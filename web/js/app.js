@@ -13,7 +13,7 @@ import {room} from './room.js?v=__V__';
 import {screen} from './screen.js?v=__V__';
 import {stream} from './stream.js?v=__V__';
 
-import {setState} from './app/state.js?v=__V__';
+import {setAppState} from 'state';
 import {app} from './app/lifecycle.js?v=__V__';
 import {initWiring} from './app/wiring.js?v=__V__';
 import {initStatsProbes} from './app/statsProbes.js?v=__V__';
@@ -26,7 +26,7 @@ screen.add(menu, stream);
 
 initWiring();
 
-setState(app.state.eden);
+setAppState(app.state.eden);
 
 input.init();
 stream.init();

@@ -72,8 +72,9 @@ export const GAME_PLAYER_IDX_SET = 'gamePlayerIndexSet';
 /** no payload. pub: wiring ← GAME_ERROR_NO_FREE_SLOTS. sub: wiring (shows "No free slots"). */
 export const GAME_ERROR_NO_FREE_SLOTS = 'gameNoFreeSlots';
 
-/** payload: `Array<{user_id, slot, identity}>`. pub: wiring ← ROOM_MEMBERS. sub: wiring → overlay.setRoomMembers. */
-export const ROOM_MEMBERS_CHANGED = 'roomMembersChanged';
+// ROOM_MEMBERS roster snapshot now goes directly to state.js
+// (setState({roomMembers})) and overlay re-renders via subscribe. No
+// event needed.
 
 // ── WebRTC signalling and lifecycle ─────────────────────────────────
 

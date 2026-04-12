@@ -35,7 +35,6 @@ import {
     RECORDING_STATUS_CHANGED,
     RECORDING_TOGGLED,
     REFRESH_INPUT,
-    ROOM_MEMBERS_CHANGED,
     SETTINGS_CHANGED,
     TRIGGER_CHANGED,
     WEBRTC_CONNECTION_CLOSED,
@@ -60,9 +59,8 @@ import {stream} from '../stream.js?v=__V__';
 import {workerManager} from '../workerManager.js?v=__V__';
 
 import {handleRumble} from './rumble.js?v=__V__';
-import {store} from './state.js?v=__V__';
-import {app, armSharedSessionFallback, onConnectionReady} from './lifecycle.js?v=__V__';
-import {showMenuScreen} from './lifecycle.js?v=__V__';
+import {getState, setState} from 'state';
+import {app, armSharedSessionFallback, onConnectionReady, showMenuScreen} from './lifecycle.js?v=__V__';
 import {
     handleToggle,
     onAxisChanged,
@@ -117,7 +115,7 @@ const onMessage = (m) => {
             // Broadcast: active session killed by another user. Reset
             // everyone to the game list and reinit WebRTC for the next
             // pick.
-            if (store.state === app.state.game || room.id) {
+            if (getState().appState === app.state.game || room.id) {
                 message.show('Session ended.');
                 webrtc.stop();
                 resetToMenu({reconnect: true});
@@ -128,7 +126,7 @@ const onMessage = (m) => {
             break;
         case api.endpoint.ROOM_MEMBERS:
             // Full-roster snapshot from the worker: { members: [{ user_id, slot, identity }] }
-            pub(ROOM_MEMBERS_CHANGED, payload?.members || []);
+            setState({roomMembers: payload?.members || []});
             break;
     }
 };
@@ -178,13 +176,10 @@ export const initWiring = () => {
     // Incoming messages
     sub(MESSAGE, onMessage);
 
-    // Overlay roster rendering
-    sub(ROOM_MEMBERS_CHANGED, (members) => overlay.setRoomMembers(members));
-
     sub(GAME_ROOM_AVAILABLE, async () => { stream.play(); }, 2);
     sub(GAME_SAVED, () => message.show('Saved'));
     sub(GAME_PLAYER_IDX, data => {
-        updatePlayerIndex(+data.index, store.state !== app.state.game);
+        updatePlayerIndex(+data.index, getState().appState !== app.state.game);
     });
     sub(GAME_PLAYER_IDX_SET, idx => {
         if (!isNaN(+idx)) message.show(+idx + 1);
@@ -207,7 +202,7 @@ export const initWiring = () => {
         if (data.roomId) room.id = data.roomId;
         api.server.initWebrtc();
         gameList.set(data.games);
-        if (!data.roomId && (store.state === app.state.eden || store.state === app.state.menu)) {
+        if (!data.roomId && (getState().appState === app.state.eden || getState().appState === app.state.menu)) {
             showMenuScreen();
         } else if (data.roomId) {
             armSharedSessionFallback();
@@ -221,9 +216,9 @@ export const initWiring = () => {
     sub(WEBRTC_CONNECTION_READY, onConnectionReady);
     sub(WEBRTC_CONNECTION_CLOSED, () => {
         webrtc.stop();
-        if (store.state === app.state.game) {
+        if (getState().appState === app.state.game) {
             resetToMenu({reconnect: true});
-        } else if (store.state !== app.state.eden && room.id) {
+        } else if (getState().appState !== app.state.eden && room.id) {
             resetToMenu({reconnect: true});
         } else {
             // Fresh page load or already at menu: preserve room.id for pending InitSession.
@@ -235,10 +230,10 @@ export const initWiring = () => {
     sub(GAMEPAD_DISCONNECTED, () => message.show('Gamepad disconnected'));
 
     // Keyboard + mouse in Screen Lock mode — forwarded to state.keyboardInput / mouseMove / mousePress.
-    sub(KEYBOARD_KEY_DOWN, (v) => store.state.keyboardInput?.(true, v));
-    sub(KEYBOARD_KEY_UP, (v) => store.state.keyboardInput?.(false, v));
-    sub(MOUSE_MOVED, (e) => store.state.mouseMove?.(e));
-    sub(MOUSE_PRESSED, (e) => store.state.mousePress?.(e));
+    sub(KEYBOARD_KEY_DOWN, (v) => getState().appState.keyboardInput?.(true, v));
+    sub(KEYBOARD_KEY_UP, (v) => getState().appState.keyboardInput?.(false, v));
+    sub(MOUSE_MOVED, (e) => getState().appState.mouseMove?.(e));
+    sub(MOUSE_PRESSED, (e) => getState().appState.mousePress?.(e));
 
     // General keyboard handler
     sub(KEY_PRESSED, onKeyPress);

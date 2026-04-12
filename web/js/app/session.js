@@ -18,8 +18,8 @@ import {screen} from '../screen.js?v=__V__';
 import {stream} from '../stream.js?v=__V__';
 import {workerManager} from '../workerManager.js?v=__V__';
 
-import {store, setState} from './state.js?v=__V__';
-import {app, showMenuScreen} from './lifecycle.js?v=__V__';
+import {getState, setState, setAppState} from 'state';
+import {app, showMenuScreen, cancelSharedSessionFallback} from './lifecycle.js?v=__V__';
 
 const playerIndex = document.getElementById('playeridx');
 
@@ -62,12 +62,13 @@ export const startGame = () => {
 
     log.info('[control] game start');
 
-    setState(app.state.game);
+    setAppState(app.state.game);
 
     gameList.hide();
     screen.toggle(stream);
 
     const joiningSharedSession = !!room.id;
+    setState({joiningSharedSession});
     const selectedTitle = gameList.selected || parseGameNameFromRoomId(room.id);
 
     api.game.start(
@@ -95,7 +96,7 @@ export const startGame = () => {
     input.retropad.toggle(true);
 
     overlay.setGameTitle(game ? (game.alias || game.title) : activeGameTitle(joiningSharedSession));
-    overlay.setCurrentSlot(+playerIndex.value - 1);
+    setState({currentSlot: +playerIndex.value - 1});
     overlay.enable();
 };
 
@@ -113,12 +114,11 @@ export const hideSlotPicker = () => slotPickerEl.classList.add('hidden');
 export const updatePlayerIndex = (idx, not_game = false) => {
     playerIndex.value = idx + 1;
     !not_game && api.game.setPlayerIndex(idx);
-    overlay.setCurrentSlot(idx);
+    setState({currentSlot: idx});
 };
 
 export const resetToMenu = ({reconnect = false} = {}) => {
-    clearTimeout(store.sharedSessionFallbackTimer);
-    store.sharedSessionFallbackTimer = null;
+    cancelSharedSessionFallback();
     overlay.disable();
     hideSlotPicker();
     input.retropad.toggle(false);
@@ -165,7 +165,7 @@ overlay.onAudio = () => {
     const willMute = !video.muted;
     stream.audio.mute(willMute);
     if (!willMute) stream.play();
-    store.interacted = true;
+    setState({interacted: true});
     overlay.setAudioMuted(video.muted);
 };
 

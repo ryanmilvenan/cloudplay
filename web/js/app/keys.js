@@ -11,7 +11,7 @@ import {DPAD_TOGGLE, HELP_OVERLAY_TOGGLED, pub} from 'event';
 import {stream} from '../stream.js?v=__V__';
 import {screen} from '../screen.js?v=__V__';
 
-import {store, setState} from './state.js?v=__V__';
+import {getState, setState, setAppState} from 'state';
 import {app} from './lifecycle.js?v=__V__';
 
 export const keyButtons = {};
@@ -26,7 +26,7 @@ export const helpScreen = {
     show(show, ev) {
         if (this.shown === show) return;
 
-        const isGameScreen = store.state === app.state.game;
+        const isGameScreen = getState().appState === app.state.game;
         screen.toggle(undefined, !show);
 
         gui.toggle(keyButtons[KEY.SAVE], show || isGameScreen);
@@ -50,11 +50,12 @@ export const onKeyPress = (data) => {
         if (button) button.classList.add('pressed');
     }
 
-    if (store.state !== app.state.settings) {
+    const s = getState();
+    if (s.appState !== app.state.settings) {
         if (KEY.HELP === data.key) helpScreen.show(true, event);
     }
 
-    store.state.keyPress(data.key, data.code);
+    s.appState.keyPress(data.key, data.code);
 };
 
 export const onKeyRelease = (data) => {
@@ -66,27 +67,29 @@ export const onKeyRelease = (data) => {
         if (button) button.classList.remove('pressed');
     }
 
-    if (store.state !== app.state.settings) {
+    const s = getState();
+    if (s.appState !== app.state.settings) {
         if (KEY.HELP === data.key) helpScreen.show(false, event);
     }
 
-    if (!store.interacted) {
+    if (!s.interacted) {
         stream.audio.mute(false);
-        store.interacted = true;
+        setState({interacted: true});
     }
 
-    if (KEY.SETTINGS === data.key) setState(app.state.settings);
+    if (KEY.SETTINGS === data.key) setAppState(app.state.settings);
 
-    store.state.keyRelease(data.key, data.code);
+    s.appState.keyRelease(data.key, data.code);
 };
 
 export const onAxisChanged = (data) => {
-    if (!store.interacted) {
+    const s = getState();
+    if (!s.interacted) {
         stream.audio.mute(false);
-        store.interacted = true;
+        setState({interacted: true});
     }
 
-    store.state.axisChanged(data.id, data.value);
+    s.appState.axisChanged(data.id, data.value);
 };
 
 export const onTriggerChanged = (data) => {

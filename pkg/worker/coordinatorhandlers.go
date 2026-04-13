@@ -401,6 +401,30 @@ func (c *coordinator) HandleLoadGame(rq api.LoadGameRequest, w *Worker) api.Out 
 	return api.OkPacket
 }
 
+// HandleSetRaCredentials logs the given user into rcheevos. Host-only
+// semantics: whichever user last sent credentials is the one whose
+// unlocks we track. Runs in a goroutine so it doesn't block the
+// coordinator message loop on the RA server round-trip.
+func (c *coordinator) HandleSetRaCredentials(rq api.SetRaCredentialsRequest, w *Worker) {
+	user := w.router.FindUser(rq.Id)
+	if user == nil {
+		w.log.Warn().Msgf("RA creds for unknown user id %s", rq.Id)
+		return
+	}
+	if w.rch == nil {
+		w.log.Warn().Msgf("RA creds received but rcheevos client is not initialised")
+		return
+	}
+	w.log.Info().Msgf("RA login for user=%s (identity=%s)", rq.User, user.Identity.Sub)
+	go func(client *Worker, raUser, raToken, sub string) {
+		if err := client.rch.Login(raUser, raToken); err != nil {
+			client.log.Warn().Err(err).Msgf("RA login failed for %s", raUser)
+			return
+		}
+		client.log.Info().Msgf("RA login ok: %s (cloudplay user=%s)", client.rch.User(), sub)
+	}(w, rq.User, rq.Token, user.Identity.Sub)
+}
+
 func (c *coordinator) HandleChangePlayer(rq api.ChangePlayerRequest, w *Worker) api.Out {
 	user := w.router.FindUser(rq.Id)
 	r := w.router.FindRoom(rq.Rid)

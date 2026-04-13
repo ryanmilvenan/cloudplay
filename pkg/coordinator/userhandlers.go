@@ -163,6 +163,18 @@ func (u *User) HandleChangePlayer(rq api.ChangePlayerUserRequest) {
 	u.Notify(api.ChangePlayer, rq)
 }
 
+// HandleSetRaCredentials forwards the user's RetroAchievements
+// credentials to the attached worker so it can log into rcheevos and
+// start evaluating unlocks for them.
+func (u *User) HandleSetRaCredentials(rq api.SetRaCredentialsUserRequest) {
+	if u.w == nil {
+		return
+	}
+	if err := u.w.SetRaCredentials(u.Id().String(), rq.User, rq.Token); err != nil {
+		u.log.Error().Err(err).Msgf("RA credentials forward fail")
+	}
+}
+
 func (u *User) HandleRecordGame(rq api.RecordGameRequest) {
 	if u.w == nil {
 		return

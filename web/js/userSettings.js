@@ -7,6 +7,7 @@
 // commits wire them up. Identity render reacts to state changes via
 // subscribe() so it updates the moment InitSession payload lands.
 
+import {api} from 'api';
 import {getState, subscribe} from 'state';
 
 const panelEl = document.getElementById('user-settings-panel');
@@ -96,6 +97,10 @@ raSaveEl.addEventListener('click', () => {
         return;
     }
     writeRaCredentials({user, token});
+    // Push to worker so it can log into rcheevos. Fire-and-forget —
+    // the worker logs success/failure; a future commit can surface
+    // that back here.
+    try { api.server.setRaCredentials(user, token); } catch (_) {}
     setRaStatus(`Saved as ${user}`, 'ok');
 });
 

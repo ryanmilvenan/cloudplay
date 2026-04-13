@@ -78,6 +78,7 @@ const (
 	SaveGame         PT = 106
 	LoadGame         PT = 107
 	ChangePlayer     PT = 108
+	SetRaCredentials PT = 109
 	RecordGame       PT = 110
 	GetWorkerList    PT = 111
 	ErrNoFreeSlots   PT = 112
@@ -113,6 +114,8 @@ func (p PT) String() string {
 		return "StartGame"
 	case ChangePlayer:
 		return "ChangePlayer"
+	case SetRaCredentials:
+		return "SetRaCredentials"
 	case QuitGame:
 		return "QuitGame"
 	case SaveGame:

@@ -60,6 +60,15 @@ type (
 	}
 	WebrtcInitResponse string
 
+	// SetRaCredentialsRequest is forwarded from the coordinator to the
+	// worker. Id identifies which user (GameSession) these credentials
+	// belong to.
+	SetRaCredentialsRequest struct {
+		Stateful
+		User  string `json:"user"`
+		Token string `json:"token"`
+	}
+
 	AppVideoInfo struct {
 		W int     `json:"w"`
 		H int     `json:"h"`

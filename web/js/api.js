@@ -12,6 +12,7 @@ const endpoints = {
     GAME_SAVE: 106,
     GAME_LOAD: 107,
     GAME_SET_PLAYER_INDEX: 108,
+    SET_RA_CREDENTIALS: 109,
     GAME_RECORDING: 110,
     GET_WORKER_LIST: 111,
     GAME_ERROR_NO_FREE_SLOTS: 112,
@@ -313,6 +314,10 @@ export const api = {
         sendSdp: (sdp) => packet(endpoints.ANSWER, btoa(JSON.stringify(sdp))),
         latencyCheck: (id, list) => packet(endpoints.LATENCY_CHECK, list, id),
         getWorkerList: () => packet(endpoints.GET_WORKER_LIST),
+        // RetroAchievements credentials forwarded to the worker so it
+        // can log into rcheevos and track unlocks. Called from
+        // userSettings.js on Save.
+        setRaCredentials: (user, token) => packet(endpoints.SET_RA_CREDENTIALS, {user, token}),
     },
     game: {
         input: {
@@ -338,5 +343,5 @@ export const api = {
         toggleRecording: (active = false, userName = '') =>
             packet(endpoints.GAME_RECORDING, {active: active, user: userName}),
         quit: (roomId) => packet(endpoints.GAME_QUIT, {room_id: roomId}),
-    }
+    },
 }

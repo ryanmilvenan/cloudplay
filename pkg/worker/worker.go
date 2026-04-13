@@ -12,6 +12,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/network/httpx"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/cloud"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/rcheevos"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/room"
 )
 
@@ -29,6 +30,12 @@ type Worker struct {
 		Stop() error
 	}
 	storage cloud.Storage
+
+	// rch is the singleton rcheevos client used to log hosts in,
+	// evaluate achievements, and post unlocks. Created once per worker
+	// process; a failure here is non-fatal — the worker just won't
+	// track achievements until the problem is resolved.
+	rch *rcheevos.Client
 }
 
 func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
@@ -76,6 +83,12 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 		log.Warn().Err(err).Msgf("cloud storage fail, using no storage")
 	}
 	worker.storage = st
+
+	if rch, rerr := rcheevos.NewClient(log); rerr != nil {
+		log.Warn().Err(rerr).Msgf("rcheevos init fail; achievements disabled")
+	} else {
+		worker.rch = rch
+	}
 
 	return worker, nil
 }
@@ -137,6 +150,10 @@ func (w *Worker) Stop() error {
 			err0 := s.Stop()
 			err = errors.Join(err, err0)
 		}
+	}
+	if w.rch != nil {
+		w.rch.Close()
+		w.rch = nil
 	}
 	return err
 }

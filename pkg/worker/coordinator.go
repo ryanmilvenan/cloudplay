@@ -82,6 +82,8 @@ func (c *coordinator) HandleRequests(w *Worker) chan struct{} {
 			err = api.Do(x, func(d api.LoadGameRequest) { out = c.HandleLoadGame(d, w) })
 		case api.ChangePlayer:
 			err = api.Do(x, func(d api.ChangePlayerRequest) { out = c.HandleChangePlayer(d, w) })
+		case api.SetRaCredentials:
+			err = api.Do(x, func(d api.SetRaCredentialsRequest) { c.HandleSetRaCredentials(d, w) })
 		case api.RecordGame:
 			err = api.Do(x, func(d api.RecordGameRequest) { out = c.HandleRecordGame(d, w) })
 		case api.WebrtcAnswer:

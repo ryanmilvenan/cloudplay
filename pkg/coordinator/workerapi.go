@@ -69,3 +69,15 @@ func (w *Worker) RecordGame(id string, rec bool, recUser string) (*api.RecordGam
 func (w *Worker) TerminateSession(id string) {
 	_, _ = w.Send(api.TerminateSession, api.TerminateSessionRequest{Id: id})
 }
+
+// SetRaCredentials forwards RetroAchievements credentials for the
+// user with the given id to the worker so it can log them into
+// rcheevos.
+func (w *Worker) SetRaCredentials(id, user, token string) error {
+	w.Notify(api.SetRaCredentials, api.SetRaCredentialsRequest{
+		Stateful: api.Stateful{Id: id},
+		User:     user,
+		Token:    token,
+	})
+	return nil
+}

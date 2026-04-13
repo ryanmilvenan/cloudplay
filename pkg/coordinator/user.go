@@ -75,6 +75,8 @@ func (u *User) HandleRequests(info HasServerInfo, conf config.CoordinatorConfig)
 			err = u.HandleLoadGame()
 		case api.ChangePlayer:
 			err = api.Do(x, u.HandleChangePlayer)
+		case api.SetRaCredentials:
+			err = api.Do(x, u.HandleSetRaCredentials)
 		case api.ResetGame:
 			err = api.Do(x, u.HandleResetGame)
 		case api.RecordGame:

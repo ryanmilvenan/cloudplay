@@ -38,4 +38,13 @@ type (
 	}
 	WebrtcAnswerUserRequest string
 	WebrtcUserIceCandidate  string
+	// SetRaCredentialsUserRequest is sent by the client whenever the
+	// user saves their RetroAchievements credentials in the overlay
+	// preferences panel. Token is the RA API token (not a password).
+	// The worker uses these to log into rcheevos and enable per-user
+	// achievement tracking.
+	SetRaCredentialsUserRequest struct {
+		User  string `json:"user"`
+		Token string `json:"token"`
+	}
 )

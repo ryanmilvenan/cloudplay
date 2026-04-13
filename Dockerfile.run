@@ -1,4 +1,4 @@
-FROM localhost/cloudretro-phase3:latest
+FROM localhost/cloudplay:latest
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \

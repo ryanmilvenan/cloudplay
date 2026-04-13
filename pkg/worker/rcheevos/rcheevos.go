@@ -35,7 +35,7 @@ static const char* rcheevos_game_title(rc_client_t* client) {
 }
 static uint32_t rcheevos_achievement_count(rc_client_t* client) {
     rc_client_achievement_list_t* list = rc_client_create_achievement_list(
-        client, RC_CLIENT_ACHIEVEMENT_CATEGORY_CORE, RC_CLIENT_ACHIEVEMENT_LIST_GROUPING_NONE);
+        client, RC_CLIENT_ACHIEVEMENT_CATEGORY_CORE, RC_CLIENT_ACHIEVEMENT_LIST_GROUPING_LOCK_STATE);
     if (!list) return 0;
     uint32_t count = 0;
     for (uint32_t i = 0; i < list->num_buckets; i++) count += list->buckets[i].num_achievements;

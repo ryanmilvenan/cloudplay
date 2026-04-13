@@ -21,6 +21,9 @@ package rcheevos
 rc_client_t* rcheevos_create(void);
 void         rcheevos_begin_login(rc_client_t* client, const char* username, const char* token, uintptr_t userdata);
 void         rcheevos_begin_login_password(rc_client_t* client, const char* username, const char* password, uintptr_t userdata);
+
+// rc_client_do_frame wrapper so Go can call it through the typed handle.
+static void rcheevos_do_frame(rc_client_t* client) { rc_client_do_frame(client); }
 */
 import "C"
 
@@ -37,6 +40,12 @@ import (
 // Version returns the rcheevos library version (e.g. "12.3").
 func Version() string { return C.GoString(C.rc_version_string()) }
 
+// MemoryReader reads numBytes starting at address from emulator RAM
+// into dst and returns how many bytes were actually readable.
+// Returning 0 for any given address tells rc_client the region is
+// currently unavailable — it'll retry on the next frame.
+type MemoryReader func(address uint32, dst []byte) uint32
+
 // Client wraps an rc_client_t with Go-friendly sync for async calls.
 type Client struct {
 	handle *C.rc_client_t
@@ -46,6 +55,9 @@ type Client struct {
 	loginErr error
 	loginC   chan struct{}
 	loginH   cgo.Handle
+
+	memMu   sync.RWMutex
+	memRead MemoryReader
 }
 
 // NewClient creates an rc_client. Returns an error if rc_client_create
@@ -115,6 +127,37 @@ func (c *Client) login(username, secret string, isToken bool) error {
 
 	<-c.loginC
 	return c.loginErr
+}
+
+// SetMemoryReader installs a reader that rc_client will call to
+// fetch emulator RAM bytes during rc_client_do_frame. Pass nil to
+// detach (reverts to the default zero-fill stub).
+func (c *Client) SetMemoryReader(r MemoryReader) {
+	c.memMu.Lock()
+	c.memRead = r
+	c.memMu.Unlock()
+}
+
+// readMemory is invoked from the read-memory C bridge. Thread-safe
+// read of the current reader.
+func (c *Client) readMemory(address uint32, dst []byte) uint32 {
+	c.memMu.RLock()
+	r := c.memRead
+	c.memMu.RUnlock()
+	if r == nil {
+		return 0
+	}
+	return r(address, dst)
+}
+
+// DoFrame runs one rcheevos evaluation tick. Call from the emulator
+// thread after each retro_run so the read-memory bridge sees RAM in
+// a valid state. Cheap when no game is loaded.
+func (c *Client) DoFrame() {
+	if c == nil || c.handle == nil {
+		return
+	}
+	C.rcheevos_do_frame(c.handle)
 }
 
 // User returns the logged-in user's display name. Empty if not logged in.

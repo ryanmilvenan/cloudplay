@@ -25,11 +25,22 @@ import (
 
 //export rcheevos_read_memory_bridge
 func rcheevos_read_memory_bridge(address C.uint32_t, buffer *C.uint8_t, numBytes C.uint32_t, client *C.rc_client_t) C.uint32_t {
-	// Stub — fill with zeros until we wire retro_get_memory_data.
-	if buffer != nil && numBytes > 0 {
-		C.memset(unsafe.Pointer(buffer), 0, C.size_t(numBytes))
+	if buffer == nil || numBytes == 0 {
+		return 0
 	}
-	return numBytes
+	c := clientByHandle(client)
+	if c == nil {
+		return 0
+	}
+	dst := unsafe.Slice((*byte)(unsafe.Pointer(buffer)), int(numBytes))
+	n := c.readMemory(uint32(address), dst)
+	if n < numBytes {
+		// Zero the remainder so rc_client doesn't see stale garbage.
+		for i := int(n); i < int(numBytes); i++ {
+			dst[i] = 0
+		}
+	}
+	return C.uint32_t(n)
 }
 
 //export rcheevos_log_bridge

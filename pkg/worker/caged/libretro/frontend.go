@@ -442,7 +442,28 @@ func (f *Frontend) SetSessionId(name string)      { f.storage.SetMainSaveName(na
 func (f *Frontend) SetDataCb(cb func([]byte))     { f.onData = cb }
 func (f *Frontend) SetRumbleCb(cb func([]byte))   { f.onRumble = cb }
 func (f *Frontend) SetVideoCb(ff func(app.Video)) { f.onVideo = ff }
-func (f *Frontend) Tick()                         { f.mu.Lock(); f.nano.Run(); f.mu.Unlock() }
+func (f *Frontend) Tick() {
+	f.mu.Lock()
+	f.nano.Run()
+	if hook := tickHook; hook != nil {
+		hook()
+	}
+	f.mu.Unlock()
+}
+
+// tickHook runs after every retro_run on the emulator thread.
+// rcheevos uses this to call rc_client_do_frame so trigger evaluation
+// can read RAM while we hold the frontend mutex.
+var tickHook func()
+
+// SetTickHook registers a function to run at the end of every
+// Frontend.Tick, on the emulator thread. Pass nil to unregister.
+func SetTickHook(f func()) { tickHook = f }
+
+// SystemRAM exposes the current game's RETRO_MEMORY_SYSTEM_RAM slice.
+// Returns nil when no game is loaded or the core doesn't expose
+// system RAM.
+func SystemRAM() []byte { return nanoarch.Nan0.SystemRAM() }
 func (f *Frontend) ViewportRecalculate()          { f.mu.Lock(); f.vw, f.vh = f.ViewportCalc(); f.mu.Unlock() }
 func (f *Frontend) ViewportSize() (int, int)      { return f.vw, f.vh }
 

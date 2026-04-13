@@ -11,6 +11,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/network"
 	"github.com/giongto35/cloud-game/v3/pkg/network/httpx"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/libretro"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/cloud"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/rcheevos"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/room"
@@ -88,6 +89,21 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 		log.Warn().Err(rerr).Msgf("rcheevos init fail; achievements disabled")
 	} else {
 		worker.rch = rch
+		// Read RAM from the currently loaded game (if any) into rcheevos.
+		rch.SetMemoryReader(func(addr uint32, dst []byte) uint32 {
+			ram := libretro.SystemRAM()
+			if ram == nil {
+				return 0
+			}
+			if uint64(addr) >= uint64(len(ram)) {
+				return 0
+			}
+			n := copy(dst, ram[addr:])
+			return uint32(n)
+		})
+		// Run trigger evaluation once per emulator tick. Cheap when
+		// no game is loaded into rc_client.
+		libretro.SetTickHook(rch.DoFrame)
 	}
 
 	return worker, nil

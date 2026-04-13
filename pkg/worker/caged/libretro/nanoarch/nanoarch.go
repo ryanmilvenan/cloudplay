@@ -762,6 +762,25 @@ func memoryData(id C.uint) unsafe.Pointer {
 	return C.bridge_retro_get_memory_data(retroGetMemoryData, id)
 }
 
+// SystemRAM returns a Go slice view over the core's main RAM region
+// (RETRO_MEMORY_SYSTEM_RAM). Returns nil if the core has no system
+// RAM exposed or no game is loaded.
+//
+// The returned slice aliases C memory — valid only for the duration
+// of the current game session. Callers must not retain it across
+// retro_unload_game.
+func (n *Nanoarch) SystemRAM() []byte {
+	size := memorySize(C.RETRO_MEMORY_SYSTEM_RAM)
+	if size == 0 {
+		return nil
+	}
+	ptr := memoryData(C.RETRO_MEMORY_SYSTEM_RAM)
+	if ptr == nil {
+		return nil
+	}
+	return unsafe.Slice((*byte)(ptr), int(size))
+}
+
 // ptSaveRam return SRAM memory pointer if core supports it or nil.
 func ptSaveRAM() *mem {
 	ptr, size := memoryData(C.RETRO_MEMORY_SAVE_RAM), memorySize(C.RETRO_MEMORY_SAVE_RAM)

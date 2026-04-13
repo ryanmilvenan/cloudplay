@@ -86,7 +86,22 @@
         </div>
         <div class="user-settings-panel__section">
             <div class="overlay-section-label">RetroAchievements</div>
-            <div class="user-settings-placeholder">Paste your RA token to track achievements per session — coming soon.</div>
+            <div class="user-settings-ra">
+                <label class="user-settings-field">
+                    <span class="user-settings-field__label">Username</span>
+                    <input id="user-settings-ra-user" type="text" autocomplete="username" class="user-settings-input" placeholder="RA username">
+                </label>
+                <label class="user-settings-field">
+                    <span class="user-settings-field__label">API token</span>
+                    <input id="user-settings-ra-token" type="password" autocomplete="off" class="user-settings-input" placeholder="paste from retroachievements.org">
+                </label>
+                <div class="user-settings-ra__actions">
+                    <button id="user-settings-ra-save" class="user-settings-btn">Save</button>
+                    <button id="user-settings-ra-clear" class="user-settings-btn user-settings-btn--ghost">Clear</button>
+                    <span id="user-settings-ra-status" class="user-settings-ra__status"></span>
+                </div>
+                <div class="user-settings-hint">Stored only in this browser, keyed by your account. Used once the achievements pipeline is wired up.</div>
+            </div>
         </div>
     </div>
 

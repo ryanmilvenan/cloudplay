@@ -353,3 +353,59 @@
     color: rgba(255,255,255,0.4);
     font-style: italic;
 }
+
+.user-settings-field {
+    display: block;
+    margin-bottom: 10px;
+}
+.user-settings-field__label {
+    display: block;
+    font-size: 11px;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 4px;
+}
+.user-settings-input {
+    width: 100%;
+    padding: 8px 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 13px;
+    box-sizing: border-box;
+}
+.user-settings-input:focus {
+    outline: none;
+    border-color: rgba(255,255,255,0.3);
+}
+.user-settings-ra__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+.user-settings-btn {
+    padding: 7px 12px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+}
+.user-settings-btn:hover { background: rgba(255,255,255,0.14); }
+.user-settings-btn--ghost {
+    background: transparent;
+}
+.user-settings-ra__status {
+    font-size: 11px;
+    color: rgba(255,255,255,0.45);
+}
+.user-settings-ra__status.is-ok { color: #4ade80; }
+.user-settings-ra__status.is-err { color: #f87171; }
+.user-settings-hint {
+    margin-top: 10px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.35);
+    font-style: italic;
+}

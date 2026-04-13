@@ -56,6 +56,10 @@ func rcheevos_login_complete_bridge(result C.int, errorMessage *C.char, client *
 
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
+// userAgent identifies the integration to retroachievements.org
+// (Cloudflare in front of the RA API blocks the default Go UA).
+var userAgent = "cloudplay/1.0 rcheevos/" + Version()
+
 //export rcheevos_server_call_bridge
 func rcheevos_server_call_bridge(request *C.rc_api_request_t, callback C.rc_client_server_callback_t, callbackData unsafe.Pointer, client *C.rc_client_t) {
 	url := C.GoString(request.url)
@@ -88,6 +92,7 @@ func rcheevos_server_call_bridge(request *C.rc_api_request_t, callback C.rc_clie
 		if err != nil {
 			return
 		}
+		req.Header.Set("User-Agent", userAgent)
 		if contentType != "" {
 			req.Header.Set("Content-Type", contentType)
 		}

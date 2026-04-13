@@ -14,9 +14,9 @@
 
 package rcheevos
 
-// #cgo CFLAGS: -I${SRCDIR}/upstream/include
+// #cgo CFLAGS: -I${SRCDIR}/upstream/include -I${SRCDIR}/upstream/src
 // #cgo LDFLAGS: -L${SRCDIR}/upstream/build -lrcheevos
-// #include <rc_version.h>
+// #include "rc_version.h"
 import "C"
 
 // Version returns the rcheevos library version in "major.minor.patch"

@@ -34,11 +34,9 @@ func rcheevos_read_memory_bridge(address C.uint32_t, buffer *C.uint8_t, numBytes
 	}
 	dst := unsafe.Slice((*byte)(unsafe.Pointer(buffer)), int(numBytes))
 	n := c.readMemory(uint32(address), dst)
-	if n < numBytes {
+	for i := int(n); i < int(numBytes); i++ {
 		// Zero the remainder so rc_client doesn't see stale garbage.
-		for i := int(n); i < int(numBytes); i++ {
-			dst[i] = 0
-		}
+		dst[i] = 0
 	}
 	return C.uint32_t(n)
 }

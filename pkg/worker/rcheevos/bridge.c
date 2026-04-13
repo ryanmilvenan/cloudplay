@@ -6,12 +6,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <rc_client.h>
+#include <rc_hash.h>
 
 // Go-exported bridges (implemented in bridge.go via //export).
 extern uint32_t rcheevos_read_memory_bridge(uint32_t address, uint8_t* buffer, uint32_t num_bytes, rc_client_t* client);
 extern void     rcheevos_server_call_bridge(const rc_api_request_t* request, rc_client_server_callback_t callback, void* callback_data, rc_client_t* client);
 extern void     rcheevos_log_bridge(const char* message, const rc_client_t* client);
 extern void     rcheevos_login_complete_bridge(int result, const char* error_message, rc_client_t* client, void* userdata);
+extern void     rcheevos_load_game_complete_bridge(int result, const char* error_message, rc_client_t* client, void* userdata);
 
 // rcheevos_create creates an rc_client with our Go-side callbacks wired.
 rc_client_t* rcheevos_create(void) {
@@ -49,4 +51,18 @@ void rcheevos_invoke_server_callback(rc_client_server_callback_t cb, void* callb
         .http_status_code = http_status_code,
     };
     cb(&resp, callback_data);
+}
+
+// rcheevos_hash_file computes the RA hash for a ROM at path, given a
+// console id. Writes a 32-char hex string + NUL to out_hash (33 bytes).
+// Returns RC_OK on success.
+int rcheevos_hash_file(uint32_t console_id, const char* path, char* out_hash) {
+    return rc_hash_generate_from_file(out_hash, console_id, path);
+}
+
+// rcheevos_begin_load_game kicks off load-game for the current hash.
+// rc_client fetches the achievement set + unlock state asynchronously;
+// completion routes to rcheevos_load_game_complete_bridge via userdata.
+void rcheevos_begin_load_game(rc_client_t* client, const char* hash, uintptr_t userdata) {
+    rc_client_begin_load_game(client, hash, rcheevos_load_game_complete_bridge, (void*)userdata);
 }

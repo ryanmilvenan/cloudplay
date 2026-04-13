@@ -184,6 +184,22 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 			return api.EmptyPacket
 		}
 
+		// Kick off rcheevos game-load async — if the user is logged
+		// into RA, rc_client fetches the achievement set for this
+		// ROM's hash. Failures (no credentials, unknown system,
+		// network) are non-fatal; the game still launches.
+		if w.rch != nil {
+			fullPath := game.FullPath(w.conf.Library.BasePath)
+			system := game.System
+			go func() {
+				if err := w.rch.LoadGameFromFile(fullPath, system); err != nil {
+					w.log.Warn().Err(err).Msgf("rcheevos load fail (%s)", system)
+					return
+				}
+				w.log.Info().Msgf("rcheevos game loaded: %q (%d achievements)", w.rch.GameTitle(), w.rch.AchievementCount())
+			}()
+		}
+
 		m.AudioSrcHz = app.AudioSampleRate()
 		m.AudioFrames = w.conf.Encoder.Audio.Frames
 		m.VideoW, m.VideoH = app.ViewportSize()

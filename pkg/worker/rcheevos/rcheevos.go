@@ -21,9 +21,27 @@ package rcheevos
 rc_client_t* rcheevos_create(void);
 void         rcheevos_begin_login(rc_client_t* client, const char* username, const char* token, uintptr_t userdata);
 void         rcheevos_begin_login_password(rc_client_t* client, const char* username, const char* password, uintptr_t userdata);
+int          rcheevos_hash_file(uint32_t console_id, const char* path, char* out_hash);
+void         rcheevos_begin_load_game(rc_client_t* client, const char* hash, uintptr_t userdata);
 
 // rc_client_do_frame wrapper so Go can call it through the typed handle.
 static void rcheevos_do_frame(rc_client_t* client) { rc_client_do_frame(client); }
+
+// rcheevos_game_info returns the title + count of achievements in the
+// currently loaded game, or NULLs / zero if no game is loaded.
+static const char* rcheevos_game_title(rc_client_t* client) {
+    const rc_client_game_t* g = rc_client_get_game_info(client);
+    return g ? g->title : NULL;
+}
+static uint32_t rcheevos_achievement_count(rc_client_t* client) {
+    rc_client_achievement_list_t* list = rc_client_create_achievement_list(
+        client, RC_CLIENT_ACHIEVEMENT_CATEGORY_CORE, RC_CLIENT_ACHIEVEMENT_LIST_GROUPING_NONE);
+    if (!list) return 0;
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < list->num_buckets; i++) count += list->buckets[i].num_achievements;
+    rc_client_destroy_achievement_list(list);
+    return count;
+}
 */
 import "C"
 
@@ -55,6 +73,11 @@ type Client struct {
 	loginErr error
 	loginC   chan struct{}
 	loginH   cgo.Handle
+
+	loadMu  sync.Mutex
+	loadErr error
+	loadC   chan struct{}
+	loadH   cgo.Handle
 
 	memMu   sync.RWMutex
 	memRead MemoryReader
@@ -148,6 +171,115 @@ func (c *Client) readMemory(address uint32, dst []byte) uint32 {
 		return 0
 	}
 	return r(address, dst)
+}
+
+// ConsoleID maps a cloudplay system identifier (as used in
+// config.yaml — 'snes', 'n64', 'ps2' etc.) to the RC_CONSOLE_* enum
+// rcheevos uses for ROM hashing and achievement-set lookup.
+// Unknown systems map to 0 (RC_CONSOLE_UNKNOWN), which means the
+// load-game flow will fail with "unsupported system" — not a crash.
+func ConsoleID(system string) uint32 {
+	switch system {
+	case "snes":
+		return 3
+	case "n64":
+		return 2
+	case "nes":
+		return 7
+	case "gba":
+		return 5
+	case "gbc":
+		return 6
+	case "gb":
+		return 4
+	case "genesis", "megadrive":
+		return 1
+	case "ps1", "pcsx":
+		return 12
+	case "ps2":
+		return 21
+	case "gc":
+		return 16
+	case "wii":
+		return 19
+	case "dreamcast":
+		return 40
+	case "dos":
+		return 26
+	case "mame":
+		return 27
+	}
+	return 0
+}
+
+// LoadGameFromFile computes the RA hash for the ROM at path (based on
+// the given cloudplay system string), then asks rc_client to fetch
+// the achievement set. Blocks until the server responds.
+func (c *Client) LoadGameFromFile(path, system string) error {
+	if c == nil || c.handle == nil {
+		return errors.New("rcheevos client not initialised")
+	}
+	consoleID := ConsoleID(system)
+	if consoleID == 0 {
+		return fmt.Errorf("unknown rcheevos console for system %q", system)
+	}
+
+	var hash [33]C.char
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+	if rc := C.rcheevos_hash_file(C.uint32_t(consoleID), cpath, &hash[0]); rc != 0 {
+		return fmt.Errorf("rc_hash_generate_from_file returned %d", int(rc))
+	}
+
+	c.loadMu.Lock()
+	c.loadErr = nil
+	c.loadC = make(chan struct{})
+	c.loadH = cgo.NewHandle(c)
+	c.loadMu.Unlock()
+	defer func() {
+		c.loadMu.Lock()
+		c.loadH.Delete()
+		c.loadH = 0
+		c.loadMu.Unlock()
+	}()
+
+	C.rcheevos_begin_load_game(c.handle, &hash[0], C.uintptr_t(c.loadH))
+
+	<-c.loadC
+	return c.loadErr
+}
+
+// finishLoadGame is invoked by the exported load-game completion bridge.
+func (c *Client) finishLoadGame(result C.int, errorMessage *C.char) {
+	if result != 0 {
+		msg := C.GoString(errorMessage)
+		if msg == "" {
+			msg = fmt.Sprintf("rc_client load_game failed with code %d", int(result))
+		}
+		c.loadErr = errors.New(msg)
+	}
+	close(c.loadC)
+}
+
+// GameTitle returns the title of the loaded game, or "" if none.
+func (c *Client) GameTitle() string {
+	if c == nil || c.handle == nil {
+		return ""
+	}
+	title := C.rcheevos_game_title(c.handle)
+	if title == nil {
+		return ""
+	}
+	return C.GoString(title)
+}
+
+// AchievementCount returns how many core achievements the current
+// game has. Zero when no game is loaded.
+func (c *Client) AchievementCount() int {
+	if c == nil || c.handle == nil {
+		return 0
+	}
+	return int(C.rcheevos_achievement_count(c.handle))
 }
 
 // DoFrame runs one rcheevos evaluation tick. Call from the emulator

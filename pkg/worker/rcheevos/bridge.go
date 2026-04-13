@@ -65,6 +65,19 @@ func rcheevos_login_complete_bridge(result C.int, errorMessage *C.char, client *
 	c.finishLogin(result, errorMessage)
 }
 
+//export rcheevos_load_game_complete_bridge
+func rcheevos_load_game_complete_bridge(result C.int, errorMessage *C.char, client *C.rc_client_t, userdata unsafe.Pointer) {
+	h := cgo.Handle(uintptr(userdata))
+	if h == 0 {
+		return
+	}
+	c, ok := h.Value().(*Client)
+	if !ok || c == nil {
+		return
+	}
+	c.finishLoadGame(result, errorMessage)
+}
+
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
 // userAgent identifies the integration to retroachievements.org

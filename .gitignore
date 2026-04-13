@@ -84,3 +84,9 @@ nvram/
 ### ROMs (never tracked — live on moon under assets/games/, .gitignored here)
 assets/games/
 games/
+
+### Runtime data (lives on deployment target, never in git)
+/cores/
+/saves/
+/libretro/
+/dolphin/

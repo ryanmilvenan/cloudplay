@@ -8,8 +8,6 @@ import {
     GAME_PLAYER_IDX,
     DPAD_TOGGLE,
     MENU_HANDLER_ATTACHED,
-    MENU_PRESSED,
-    MENU_RELEASED
 } from 'event';
 import {KEY} from 'input';
 import {log} from 'log';
@@ -182,7 +180,6 @@ function handlePlayerSlider() {
 // Touch menu
 let menuTouchIdx = null;
 let menuTouchDrag = null;
-let menuTouchTime = null;
 
 function handleMenuDown(event) {
     // Identify of touch point
@@ -193,7 +190,6 @@ function handleMenuDown(event) {
     }
 
     menuTouchDrag = {x: event.clientX, y: event.clientY,};
-    menuTouchTime = Date.now();
 }
 
 function handleMenuMove(evt) {
@@ -211,8 +207,7 @@ function handleMenuMove(evt) {
             return;
     }
 
-    const pos = env.display().isLayoutSwitched ? evt.clientX - menuTouchDrag.x : menuTouchDrag.y - evt.clientY;
-    pub(MENU_PRESSED, pos);
+    // MENU_PRESSED event was removed — this handler retained for drag bookkeeping.
 }
 
 function handleMenuUp(evt) {
@@ -220,20 +215,8 @@ function handleMenuUp(evt) {
     if (evt.changedTouches) {
         if (evt.changedTouches[0].identifier !== menuTouchIdx)
             return;
-        evt.clientX = evt.changedTouches[0].clientX;
-        evt.clientY = evt.changedTouches[0].clientY;
     }
-
-    let newY = env.display().isLayoutSwitched ? -menuTouchDrag.x + evt.clientX : menuTouchDrag.y - evt.clientY;
-
-    let interval = Date.now() - menuTouchTime; // 100ms?
-    if (interval < 200) {
-        // calc velocity
-        newY = newY / interval * 250;
-    }
-
-    // current item?
-    pub(MENU_RELEASED, newY);
+    // MENU_RELEASED event was removed; this just clears drag bookkeeping.
     menuTouchDrag = null;
 }
 

@@ -13,8 +13,7 @@ import {room} from './room.js?v=__V__';
 import {screen} from './screen.js?v=__V__';
 import {stream} from './stream.js?v=__V__';
 
-import {setAppState} from 'state';
-import {app} from './app/lifecycle.js?v=__V__';
+import {app, setAppState} from './app/lifecycle.js?v=__V__';
 import {initWiring} from './app/wiring.js?v=__V__';
 import {initStatsProbes} from './app/statsProbes.js?v=__V__';
 import {initOrphanRecover} from './app/orphanRecover.js?v=__V__';

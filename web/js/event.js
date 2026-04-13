@@ -72,9 +72,9 @@ export const GAME_PLAYER_IDX_SET = 'gamePlayerIndexSet';
 /** no payload. pub: wiring ← GAME_ERROR_NO_FREE_SLOTS. sub: wiring (shows "No free slots"). */
 export const GAME_ERROR_NO_FREE_SLOTS = 'gameNoFreeSlots';
 
-// ROOM_MEMBERS roster snapshot now goes directly to state.js
-// (setState({roomMembers})) and overlay re-renders via subscribe. No
-// event needed.
+// Note: the worker's ROOM_MEMBERS roster snapshot is not an event —
+// wiring.onMessage writes it directly to state.js (setState({roomMembers}))
+// and overlay re-renders via subscribe.
 
 // ── WebRTC signalling and lifecycle ─────────────────────────────────
 
@@ -120,12 +120,6 @@ export const GAMEPAD_DISCONNECTED = 'gamepadDisconnected';
 /** payload: `{event: string, handler: fn}`. pub: touch.js (init). sub: menu.js (re-registers after re-render). */
 export const MENU_HANDLER_ATTACHED = 'menuHandlerAttached';
 
-/** payload: position. pub: touch.js. sub: **none currently** — reserved. */
-export const MENU_PRESSED = 'menuPressed';
-
-/** payload: release y-coord. pub: touch.js. sub: **none currently** — reserved. */
-export const MENU_RELEASED = 'menuReleased';
-
 // ── Keyboard + key dispatch ─────────────────────────────────────────
 
 /** payload: `{key, code?}`. pub: joystick/keyboard/touch. sub: wiring → onKeyPress (keys.js). */
@@ -166,12 +160,6 @@ export const MOUSE_MOVED = 'mouseMoved';
 export const MOUSE_PRESSED = 'mousePressed';
 
 // ── Display ─────────────────────────────────────────────────────────
-
-/** payload: document.fullscreenElement. pub: wiring (document.onfullscreenchange). sub: **none currently** — reserved. */
-export const FULLSCREEN_CHANGE = 'fsc';
-
-/** payload: document.pointerLockElement. pub: wiring (document.onpointerlockchange). sub: **none currently** — reserved. */
-export const POINTER_LOCK_CHANGE = 'plc';
 
 /** no payload. pub: env.js (gameBoy style MutationObserver). sub: stream.js (resize/reposition). */
 export const TRANSFORM_CHANGE = 'tc';

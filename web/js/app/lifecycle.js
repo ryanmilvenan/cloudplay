@@ -18,9 +18,50 @@ import {room} from '../room.js?v=__V__';
 import {screen} from '../screen.js?v=__V__';
 import {stats} from '../stats.js?v=__V__';
 
-import {getState, setAppState, setInitialAppState} from 'state';
+import {getState, setState} from 'state';
 import {keyButtons, handleToggle} from './keys.js?v=__V__';
 import {startGame, saveGame, loadGame, updatePlayerIndex} from './session.js?v=__V__';
+
+let _initialAppState;
+export const setInitialAppState = (s) => { _initialAppState = s; };
+
+/**
+ * State-machine transition. Handles the _uber flag (settings panel
+ * pops back to previous non-uber state), the debug log line, and
+ * keeping the derived isGameRunning flag in sync. Writes to the
+ * generic store via setState; this is the only sanctioned writer of
+ * appState / lastAppState / isGameRunning.
+ */
+export const setAppState = (newAppState) => {
+    if (newAppState === undefined) newAppState = _initialAppState;
+    const current = getState();
+    if (newAppState === current.appState) return;
+
+    const prev = current.appState;
+    let next;
+    let last;
+
+    if (prev && prev._uber) {
+        next = current.lastAppState === newAppState ? newAppState : prev;
+        last = newAppState;
+    } else {
+        next = newAppState;
+        last = prev;
+    }
+
+    setState({
+        appState: next,
+        lastAppState: last,
+        isGameRunning: next && next.name === 'game',
+    });
+
+    if (log.level === log.DEBUG) {
+        const p = prev ? prev.name : '???';
+        const c = next ? next.name : '???';
+        const k = last ? last.name : '???';
+        log.debug(`[state] ${p} -> ${c} [${k}]`);
+    }
+};
 
 const SHARED_SESSION_FALLBACK_MS = 20000;
 

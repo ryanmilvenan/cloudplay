@@ -11,8 +11,8 @@ import {DPAD_TOGGLE, HELP_OVERLAY_TOGGLED, pub} from 'event';
 import {stream} from '../stream.js?v=__V__';
 import {screen} from '../screen.js?v=__V__';
 
-import {getState, setState, setAppState} from 'state';
-import {app} from './lifecycle.js?v=__V__';
+import {getState, setState} from 'state';
+import {app, setAppState} from './lifecycle.js?v=__V__';
 
 export const keyButtons = {};
 Object.keys(KEY).forEach(button => {

@@ -18,8 +18,8 @@ import {screen} from '../screen.js?v=__V__';
 import {stream} from '../stream.js?v=__V__';
 import {workerManager} from '../workerManager.js?v=__V__';
 
-import {getState, setState, setAppState} from 'state';
-import {app, showMenuScreen, cancelSharedSessionFallback} from './lifecycle.js?v=__V__';
+import {getState, setState} from 'state';
+import {app, setAppState, showMenuScreen, cancelSharedSessionFallback} from './lifecycle.js?v=__V__';
 
 const playerIndex = document.getElementById('playeridx');
 

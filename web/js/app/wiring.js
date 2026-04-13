@@ -14,7 +14,6 @@ import {
     APP_VIDEO_CHANGED,
     AXIS_CHANGED,
     CONTROLLER_UPDATED,
-    FULLSCREEN_CHANGE,
     GAME_ERROR_NO_FREE_SLOTS,
     GAME_PLAYER_IDX,
     GAME_PLAYER_IDX_SET,
@@ -31,7 +30,6 @@ import {
     MESSAGE,
     MOUSE_MOVED,
     MOUSE_PRESSED,
-    POINTER_LOCK_CHANGE,
     RECORDING_STATUS_CHANGED,
     RECORDING_TOGGLED,
     REFRESH_INPUT,
@@ -168,10 +166,6 @@ export const initWiring = () => {
         handleToggle(true);
         message.show('Keyboard and mouse work in fullscreen');
     });
-
-    // Browser lock / fullscreen
-    document.onpointerlockchange = () => pub(POINTER_LOCK_CHANGE, document.pointerLockElement);
-    document.onfullscreenchange = () => pub(FULLSCREEN_CHANGE, document.fullscreenElement);
 
     // Incoming messages
     sub(MESSAGE, onMessage);

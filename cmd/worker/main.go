@@ -7,6 +7,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 	"github.com/giongto35/cloud-game/v3/pkg/os"
 	"github.com/giongto35/cloud-game/v3/pkg/worker"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/rcheevos"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/thread"
 )
 
@@ -18,6 +19,7 @@ func run() {
 
 	log := logger.NewConsole(conf.Worker.Debug, "w", false)
 	log.Info().Msgf("version %s", Version)
+	log.Info().Msgf("rcheevos %s", rcheevos.Version())
 	log.Info().Msgf("conf: v%v, loaded: %v", conf.Version, paths)
 	if log.GetLevel() < logger.InfoLevel {
 		log.Debug().Msgf("conf: %+v", conf)

@@ -64,6 +64,17 @@ RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
 
 # by default we ignore all except some folders and files, see .dockerignore
 COPY . ./
+
+# Build the vendored rcheevos static library for CGo linkage. rcheevos is
+# headers + 33 .c files (we skip rc_libretro.c — it depends on libretro.h
+# which we don't need for the client-side evaluator).
+RUN cd pkg/worker/rcheevos/upstream && \
+    mkdir -p build && cd build && \
+    gcc -c -O2 -fPIC -I../include -I../src \
+        $(find ../src -name "*.c" -not -name "rc_libretro.c") && \
+    ar rcs librcheevos.a *.o && \
+    rm -f *.o
+
 RUN make GO_TAGS=static,st,vulkan,nvenc build.worker
 # UPX disabled for worker — causes CGo unsafe.Pointer corruption with Go 1.21+
 # RUN find ./bin/* | xargs upx --best --lzma

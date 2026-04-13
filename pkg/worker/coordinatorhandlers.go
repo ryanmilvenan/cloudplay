@@ -401,6 +401,20 @@ func (c *coordinator) HandleLoadGame(rq api.LoadGameRequest, w *Worker) api.Out 
 	return api.OkPacket
 }
 
+func firstN(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+func lastN(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
+}
+
 // HandleSetRaCredentials logs the given user into rcheevos. Host-only
 // semantics: whichever user last sent credentials is the one whose
 // unlocks we track. Runs in a goroutine so it doesn't block the
@@ -415,7 +429,8 @@ func (c *coordinator) HandleSetRaCredentials(rq api.SetRaCredentialsRequest, w *
 		w.log.Warn().Msgf("RA creds received but rcheevos client is not initialised")
 		return
 	}
-	w.log.Info().Msgf("RA login for user=%s (identity=%s)", rq.User, user.Identity.Sub)
+	w.log.Info().Msgf("RA login for user=%q (identity=%s) token.len=%d token.head=%q token.tail=%q",
+		rq.User, user.Identity.Sub, len(rq.Token), firstN(rq.Token, 2), lastN(rq.Token, 2))
 	go func(client *Worker, raUser, raToken, sub string) {
 		if err := client.rch.Login(raUser, raToken); err != nil {
 			client.log.Warn().Err(err).Msgf("RA login failed for %s", raUser)

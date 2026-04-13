@@ -26,6 +26,10 @@ type (
 		Games  []AppMeta   `json:"games"`
 		Wid    string      `json:"wid"`
 		RoomId string      `json:"roomId,omitempty"`
+		// Identity the coordinator parsed from the WS upgrade headers.
+		// Lets the client know who it is (for the user-preferences panel,
+		// per-user state, etc.) without waiting on a roster broadcast.
+		Identity Identity `json:"identity,omitempty"`
 	}
 	AppMeta struct {
 		Alias  string `json:"alias,omitempty"`

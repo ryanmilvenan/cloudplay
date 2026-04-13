@@ -180,6 +180,7 @@ export const initWiring = () => {
     });
     sub(GAME_ERROR_NO_FREE_SLOTS, () => message.show('No free slots :(', 2500));
     sub(WEBRTC_NEW_CONNECTION, (data) => {
+        if (data.identity) setState({identity: data.identity});
         workerManager.whoami(data.wid);
         webrtc.onData = (x) => {
             // Binary rumble messages (prefix 0xFF + port + effect + strength_hi + strength_lo)

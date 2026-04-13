@@ -23,10 +23,11 @@ func (u *User) CheckLatency(req api.CheckLatencyUserResponse) (api.CheckLatencyU
 // which can clear worker.RoomId via HandleCloseRoom at any time.
 func (u *User) InitSession(wid string, ice []config.IceServer, games []api.AppMeta, roomId string) {
 	u.Notify(api.InitSession, api.InitSessionUserResponse{
-		Ice:    *(*[]api.IceServer)(unsafe.Pointer(&ice)), // don't do this at home
-		Games:  games,
-		Wid:    wid,
-		RoomId: roomId,
+		Ice:      *(*[]api.IceServer)(unsafe.Pointer(&ice)), // don't do this at home
+		Games:    games,
+		Wid:      wid,
+		RoomId:   roomId,
+		Identity: u.identity,
 	})
 }
 

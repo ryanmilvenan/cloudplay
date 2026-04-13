@@ -15,6 +15,7 @@ import {stream} from './stream.js?v=__V__';
 
 import {app, setAppState} from './app/lifecycle.js?v=__V__';
 import {initWiring} from './app/wiring.js?v=__V__';
+import './userSettings.js?v=__V__';
 import {initStatsProbes} from './app/statsProbes.js?v=__V__';
 import {initOrphanRecover} from './app/orphanRecover.js?v=__V__';
 

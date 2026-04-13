@@ -62,10 +62,31 @@
         <div class="overlay-panel__actions">
             <button id="overlay-audio" class="overlay-btn">🔊 Enable Audio</button>
             <button id="overlay-invite" class="overlay-btn">Invite Friends</button>
+            <button id="overlay-user-settings" class="overlay-btn">⚙ Preferences</button>
             <button id="overlay-save" class="overlay-btn">Save</button>
             <button id="overlay-load" class="overlay-btn">Load</button>
             <button id="overlay-reset" class="overlay-btn overlay-btn--warn">Reset Game</button>
             <button id="overlay-leave" class="overlay-btn overlay-btn--danger">Leave Game</button>
+        </div>
+    </div>
+
+    <!-- User preferences panel (core options, RA credential, control overrides) -->
+    <div id="user-settings-panel" class="user-settings-panel hidden" role="dialog" aria-modal="true" aria-labelledby="user-settings-title">
+        <div class="user-settings-panel__header">
+            <span id="user-settings-title" class="user-settings-panel__title">User Preferences</span>
+            <button id="user-settings-close" class="user-settings-panel__close" aria-label="Close">×</button>
+        </div>
+        <div class="user-settings-panel__section">
+            <div class="overlay-section-label">Signed in as</div>
+            <div id="user-settings-identity" class="user-settings-identity">—</div>
+        </div>
+        <div class="user-settings-panel__section">
+            <div class="overlay-section-label">Core options</div>
+            <div class="user-settings-placeholder">Per-game core options (controller paks, rumble, control overrides) — coming soon.</div>
+        </div>
+        <div class="user-settings-panel__section">
+            <div class="overlay-section-label">RetroAchievements</div>
+            <div class="user-settings-placeholder">Paste your RA token to track achievements per session — coming soon.</div>
         </div>
     </div>
 

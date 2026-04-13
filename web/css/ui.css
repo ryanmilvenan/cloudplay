@@ -439,8 +439,11 @@
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
     opacity: 0;
-    transform: translateX(20px);
-    transition: opacity 240ms ease, transform 240ms ease;
+    /* Start off-screen right — calc covers container padding + gap. */
+    transform: translateX(calc(100% + 40px));
+    transition:
+        opacity 280ms ease,
+        transform 340ms cubic-bezier(0.22, 1, 0.36, 1);
     pointer-events: auto;
     color: #fff;
 }

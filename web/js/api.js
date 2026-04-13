@@ -24,6 +24,10 @@ const endpoints = {
     // identity for each connected peer). Fires on StartGame,
     // ChangePlayer, and peer disconnect. Snapshot, not delta.
     ROOM_MEMBERS: 207,
+
+    // Worker→client broadcast: rcheevos just reported an unlock for
+    // the host's RA account. Payload: {id, title, description, points, badge_url}.
+    ACHIEVEMENT_UNLOCKED: 208,
 }
 
 let transport = {

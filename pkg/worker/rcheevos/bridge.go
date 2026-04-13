@@ -76,6 +76,21 @@ func rcheevos_load_game_complete_bridge(result C.int, errorMessage *C.char, clie
 	c.finishLoadGame(result, errorMessage)
 }
 
+//export rcheevos_on_achievement_triggered
+func rcheevos_on_achievement_triggered(id C.uint32_t, title, description *C.char, points C.uint32_t, badgeURL *C.char, client *C.rc_client_t) {
+	c := clientByHandle(client)
+	if c == nil {
+		return
+	}
+	c.dispatchUnlock(Unlock{
+		ID:          uint32(id),
+		Title:       C.GoString(title),
+		Description: C.GoString(description),
+		Points:      uint32(points),
+		BadgeURL:    C.GoString(badgeURL),
+	})
+}
+
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
 // userAgent identifies the integration to retroachievements.org

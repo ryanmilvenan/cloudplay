@@ -93,7 +93,10 @@ const (
 	// RoomMembers: worker→client broadcast, sent whenever room
 	// membership or slot assignment changes. Payload is a
 	// RoomMembersResponse with the full snapshot (not a delta).
-	RoomMembers      PT = 207
+	RoomMembers PT = 207
+	// AchievementUnlocked: worker→client broadcast, fires when
+	// rc_client reports an unlock for the host's RA account.
+	AchievementUnlocked PT = 208
 )
 
 func (p PT) String() string {

@@ -14,12 +14,30 @@ extern void     rcheevos_server_call_bridge(const rc_api_request_t* request, rc_
 extern void     rcheevos_log_bridge(const char* message, const rc_client_t* client);
 extern void     rcheevos_login_complete_bridge(int result, const char* error_message, rc_client_t* client, void* userdata);
 extern void     rcheevos_load_game_complete_bridge(int result, const char* error_message, rc_client_t* client, void* userdata);
+extern void     rcheevos_on_achievement_triggered(uint32_t id, const char* title, const char* description, uint32_t points, const char* badge_url, rc_client_t* client);
+
+// rcheevos_event_handler routes rc_client events to Go. We only
+// forward ACHIEVEMENT_TRIGGERED for now; leaderboards / challenge
+// indicators / game-completed can light up as UI surfaces for them
+// land. Called on the emulator thread during rc_client_do_frame.
+static void rcheevos_event_handler(const rc_client_event_t* event, rc_client_t* client) {
+    if (event->type == RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED && event->achievement) {
+        rcheevos_on_achievement_triggered(
+            event->achievement->id,
+            event->achievement->title,
+            event->achievement->description,
+            event->achievement->points,
+            event->achievement->badge_url,
+            client);
+    }
+}
 
 // rcheevos_create creates an rc_client with our Go-side callbacks wired.
 rc_client_t* rcheevos_create(void) {
     rc_client_t* c = rc_client_create(rcheevos_read_memory_bridge, rcheevos_server_call_bridge);
     if (c != NULL) {
         rc_client_enable_logging(c, RC_CLIENT_LOG_LEVEL_INFO, rcheevos_log_bridge);
+        rc_client_set_event_handler(c, rcheevos_event_handler);
     }
     return c;
 }

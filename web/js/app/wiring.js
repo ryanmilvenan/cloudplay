@@ -126,6 +126,13 @@ const onMessage = (m) => {
             // Full-roster snapshot from the worker: { members: [{ user_id, slot, identity }] }
             setState({roomMembers: payload?.members || []});
             break;
+        case api.endpoint.ACHIEVEMENT_UNLOCKED:
+            // {id, title, description, points, badge_url}
+            if (payload?.title) {
+                const pts = payload.points ? ` (${payload.points})` : '';
+                message.show(`🏆 ${payload.title}${pts}`, 5000);
+            }
+            break;
     }
 };
 

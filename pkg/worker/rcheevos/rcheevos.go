@@ -58,6 +58,21 @@ import (
 // Version returns the rcheevos library version (e.g. "12.3").
 func Version() string { return C.GoString(C.rc_version_string()) }
 
+// Unlock is handed to the AchievementHandler when rc_client reports
+// an achievement has been earned (RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED).
+type Unlock struct {
+	ID          uint32
+	Title       string
+	Description string
+	Points      uint32
+	BadgeURL    string
+}
+
+// AchievementHandler is invoked on the emulator thread right after
+// an unlock fires. Keep it lightweight — push to a channel / spawn a
+// goroutine if you need to do blocking work.
+type AchievementHandler func(Unlock)
+
 // MemoryReader reads numBytes starting at address from emulator RAM
 // into dst and returns how many bytes were actually readable.
 // Returning 0 for any given address tells rc_client the region is
@@ -81,6 +96,9 @@ type Client struct {
 
 	memMu   sync.RWMutex
 	memRead MemoryReader
+
+	achMu      sync.RWMutex
+	onUnlocked AchievementHandler
 }
 
 // NewClient creates an rc_client. Returns an error if rc_client_create
@@ -150,6 +168,24 @@ func (c *Client) login(username, secret string, isToken bool) error {
 
 	<-c.loginC
 	return c.loginErr
+}
+
+// SetAchievementHandler installs a function to call on every
+// achievement unlock. Pass nil to detach.
+func (c *Client) SetAchievementHandler(h AchievementHandler) {
+	c.achMu.Lock()
+	c.onUnlocked = h
+	c.achMu.Unlock()
+}
+
+// dispatchUnlock is called from the exported event bridge.
+func (c *Client) dispatchUnlock(u Unlock) {
+	c.achMu.RLock()
+	h := c.onUnlocked
+	c.achMu.RUnlock()
+	if h != nil {
+		h(u)
+	}
 }
 
 // SetMemoryReader installs a reader that rc_client will call to

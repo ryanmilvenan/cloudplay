@@ -100,4 +100,15 @@ type (
 	RoomMembersResponse struct {
 		Members []RoomMember `json:"members"`
 	}
+
+	// AchievementUnlockedResponse is broadcast when the rcheevos
+	// event handler fires RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED for
+	// the host's account. All peers in the room get the toast.
+	AchievementUnlockedResponse struct {
+		ID          uint32 `json:"id"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Points      uint32 `json:"points"`
+		BadgeURL    string `json:"badge_url,omitempty"`
+	}
 )

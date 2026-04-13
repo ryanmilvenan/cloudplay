@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/giongto35/cloud-game/v3/pkg/api"
 	"github.com/giongto35/cloud-game/v3/pkg/config"
 	"github.com/giongto35/cloud-game/v3/pkg/games"
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
@@ -104,6 +105,29 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 		// Run trigger evaluation once per emulator tick. Cheap when
 		// no game is loaded into rc_client.
 		libretro.SetTickHook(rch.DoFrame)
+		// Broadcast unlocks to every peer in the current room.
+		rch.SetAchievementHandler(func(u rcheevos.Unlock) {
+			log.Info().Msgf("achievement unlocked: %s (%d pts)", u.Title, u.Points)
+			r := worker.router.Room()
+			if r == nil {
+				return
+			}
+			data, err := api.Wrap(api.Out{
+				T: uint8(api.AchievementUnlocked),
+				Payload: api.AchievementUnlockedResponse{
+					ID:          u.ID,
+					Title:       u.Title,
+					Description: u.Description,
+					Points:      u.Points,
+					BadgeURL:    u.BadgeURL,
+				},
+			})
+			if err != nil {
+				log.Error().Err(err).Msgf("wrap AchievementUnlocked")
+				return
+			}
+			r.Send(data)
+		})
 	}
 
 	return worker, nil

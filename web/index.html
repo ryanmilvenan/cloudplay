@@ -92,15 +92,15 @@
                     <input id="user-settings-ra-user" type="text" autocomplete="username" class="user-settings-input" placeholder="RA username">
                 </label>
                 <label class="user-settings-field">
-                    <span class="user-settings-field__label">API token</span>
-                    <input id="user-settings-ra-token" type="password" autocomplete="off" class="user-settings-input" placeholder="paste from retroachievements.org">
+                    <span class="user-settings-field__label">Password</span>
+                    <input id="user-settings-ra-token" type="password" autocomplete="current-password" class="user-settings-input" placeholder="your retroachievements.org password">
                 </label>
                 <div class="user-settings-ra__actions">
                     <button id="user-settings-ra-save" class="user-settings-btn">Save</button>
                     <button id="user-settings-ra-clear" class="user-settings-btn user-settings-btn--ghost">Clear</button>
                     <span id="user-settings-ra-status" class="user-settings-ra__status"></span>
                 </div>
-                <div class="user-settings-hint">Stored only in this browser, keyed by your account. Used once the achievements pipeline is wired up.</div>
+                <div class="user-settings-hint">rcheevos emulator login uses your RA account password, not the Web API Key from the control panel. Password is sent once, cached server-side as a session token.</div>
             </div>
         </div>
     </div>

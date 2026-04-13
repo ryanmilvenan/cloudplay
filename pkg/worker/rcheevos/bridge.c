@@ -22,10 +22,18 @@ rc_client_t* rcheevos_create(void) {
     return c;
 }
 
-// rcheevos_begin_login kicks off rc_client login. userdata is opaque
-// to C; Go passes a cgo.Handle through it to route the completion.
+// rcheevos_begin_login kicks off rc_client login with a cached
+// session token. userdata is a cgo.Handle for completion routing.
 void rcheevos_begin_login(rc_client_t* client, const char* username, const char* token, uintptr_t userdata) {
     rc_client_begin_login_with_token(client, username, token,
+        rcheevos_login_complete_bridge, (void*)userdata);
+}
+
+// rcheevos_begin_login_password exchanges a username+password for a
+// session token. rc_client caches the token internally so subsequent
+// calls (achievement loads, unlock posts) don't need the password.
+void rcheevos_begin_login_password(rc_client_t* client, const char* username, const char* password, uintptr_t userdata) {
+    rc_client_begin_login_with_password(client, username, password,
         rcheevos_login_complete_bridge, (void*)userdata);
 }
 

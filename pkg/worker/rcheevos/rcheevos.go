@@ -20,6 +20,7 @@ package rcheevos
 
 rc_client_t* rcheevos_create(void);
 void         rcheevos_begin_login(rc_client_t* client, const char* username, const char* token, uintptr_t userdata);
+void         rcheevos_begin_login_password(rc_client_t* client, const char* username, const char* password, uintptr_t userdata);
 */
 import "C"
 
@@ -69,9 +70,22 @@ func (c *Client) Close() {
 	c.handle = nil
 }
 
-// Login authenticates against retroachievements.org with the given
-// API token. Blocks until the completion callback fires.
-func (c *Client) Login(username, token string) error {
+// Login authenticates against retroachievements.org. Prefers
+// password-based login (which works with what users see in their RA
+// control panel / know as their password). Blocks until the server
+// responds. On success rc_client internally caches a session token
+// for subsequent game loads / unlock posts.
+func (c *Client) Login(username, secret string) error {
+	return c.login(username, secret, false)
+}
+
+// LoginWithToken uses a cached Connect session token (not the Web API
+// key from the control panel — see api-docs.retroachievements.org).
+func (c *Client) LoginWithToken(username, token string) error {
+	return c.login(username, token, true)
+}
+
+func (c *Client) login(username, secret string, isToken bool) error {
 	if c == nil || c.handle == nil {
 		return errors.New("rcheevos client not initialised")
 	}
@@ -89,11 +103,15 @@ func (c *Client) Login(username, token string) error {
 	}()
 
 	cu := C.CString(username)
-	ct := C.CString(token)
+	cs := C.CString(secret)
 	defer C.free(unsafe.Pointer(cu))
-	defer C.free(unsafe.Pointer(ct))
+	defer C.free(unsafe.Pointer(cs))
 
-	C.rcheevos_begin_login(c.handle, cu, ct, C.uintptr_t(c.loginH))
+	if isToken {
+		C.rcheevos_begin_login(c.handle, cu, cs, C.uintptr_t(c.loginH))
+	} else {
+		C.rcheevos_begin_login_password(c.handle, cu, cs, C.uintptr_t(c.loginH))
+	}
 
 	<-c.loginC
 	return c.loginErr

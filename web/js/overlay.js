@@ -173,13 +173,13 @@ cogEl.addEventListener('click', (e) => {
     toggle();
 });
 
-// Slot buttons in overlay panel
+// Slot buttons in overlay panel. onSlotChange is the authoritative
+// writer — it lands in session.updatePlayerIndex, which pushes the
+// new slot into state.js, and the subscribe() below re-renders. No
+// local write needed.
 slotButtons.forEach(btn => {
     btn.addEventListener('click', () => {
-        const slot = +btn.dataset.slot;
-        currentSlot = slot;
-        updateSlots();
-        onSlotChange(slot);
+        onSlotChange(+btn.dataset.slot);
     });
 });
 

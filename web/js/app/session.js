@@ -25,7 +25,7 @@ const playerIndex = document.getElementById('playeridx');
 
 export const parseGameNameFromRoomId = (roomId = '') => {
     const parts = roomId.split('___');
-    return parts.length > 1 ? parts[1] : '';
+    return parts.length > 1 ? parts[1] : roomId;
 };
 
 export const activeGameTitle = (preferRoom = false) => {

@@ -23,6 +23,7 @@ type Emulator interface {
 	SetAudioCb(func(app.Audio))
 	SetVideoCb(func(app.Video))
 	SetDataCb(func([]byte))
+	EmitData([]byte)
 	LoadCore(name string)
 	LoadGame(path string) error
 	FPS() int
@@ -440,6 +441,7 @@ func (f *Frontend) Scale() float64                { return f.scale }
 func (f *Frontend) SetAudioCb(cb func(app.Audio)) { f.onAudio = cb }
 func (f *Frontend) SetSessionId(name string)      { f.storage.SetMainSaveName(name) }
 func (f *Frontend) SetDataCb(cb func([]byte))     { f.onData = cb }
+func (f *Frontend) EmitData(data []byte)          { f.onData(data) }
 func (f *Frontend) SetRumbleCb(cb func([]byte))   { f.onRumble = cb }
 func (f *Frontend) SetVideoCb(ff func(app.Video)) { f.onVideo = ff }
 func (f *Frontend) Tick() {

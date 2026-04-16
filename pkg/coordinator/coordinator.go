@@ -69,8 +69,6 @@ func NewHTTPServer(conf config.CoordinatorConfig, log *logger.Logger, fnMux func
 func index(conf config.CoordinatorConfig, log *logger.Logger) httpx.Handler {
 	const indexHTML = "./web/index.html"
 
-	indexTpl := template.Must(template.ParseFiles(indexHTML))
-
 	// render index page with some tpl values
 	tplData := struct {
 		Analytics config.Analytics
@@ -85,34 +83,18 @@ func index(conf config.CoordinatorConfig, log *logger.Logger) httpx.Handler {
 
 	h := httpx.FileServer("./web")
 
-	if conf.Coordinator.Debug {
-		log.Info().Msgf("Using auto-reloading index.html")
-		return httpx.HandlerFunc(func(w httpx.ResponseWriter, r *httpx.Request) {
-			if conf.Coordinator.Server.CacheControl != "" {
-				w.Header().Add("Cache-Control", conf.Coordinator.Server.CacheControl)
-			}
-			if conf.Coordinator.Server.FrameOptions != "" {
-				w.Header().Add("X-Frame-Options", conf.Coordinator.Server.FrameOptions)
-			}
-			if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, "/index.html") {
-				tpl := template.Must(template.ParseFiles(indexHTML))
-				handler(tpl, w, r)
-				return
-			}
-			h.ServeHTTP(w, r)
-		})
-	}
-
 	return httpx.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if conf.Coordinator.Server.CacheControl != "" {
-			w.Header().Add("Cache-Control", conf.Coordinator.Server.CacheControl)
-		}
 		if conf.Coordinator.Server.FrameOptions != "" {
 			w.Header().Add("X-Frame-Options", conf.Coordinator.Server.FrameOptions)
 		}
 		if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, "/index.html") {
-			handler(indexTpl, w, r)
+			w.Header().Set("Cache-Control", "no-cache")
+			tpl := template.Must(template.ParseFiles(indexHTML))
+			handler(tpl, w, r)
 			return
+		}
+		if conf.Coordinator.Server.CacheControl != "" {
+			w.Header().Add("Cache-Control", conf.Coordinator.Server.CacheControl)
 		}
 		h.ServeHTTP(w, r)
 	})

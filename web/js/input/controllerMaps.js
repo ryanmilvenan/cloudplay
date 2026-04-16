@@ -68,14 +68,17 @@ const gcMap = makeMap({
 });
 
 // N64 — needs analog stick, but triggers are digital Z-button mappings.
+// Face buttons swapped vs. Xbox layout so N64 B sits on the bottom face
+// button (Xbox A / PS Cross) instead of the top, matching N64-controller
+// muscle memory where B is the primary action button.
 const n64Map = makeMap({
     analogAxes: true,
     analogTriggers: false,
     buttons: {
-        0: KEY.A,
+        0: KEY.Y,       // Xbox A / PS Cross → N64 B
         1: KEY.B,
         2: KEY.X,
-        3: KEY.Y,
+        3: KEY.A,       // Xbox Y / PS Triangle → (was N64 B)
         4: KEY.L,
         5: KEY.R,
         6: KEY.L2,

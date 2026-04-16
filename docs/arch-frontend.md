@@ -4,7 +4,7 @@
 > See [../CLAUDE.md](../CLAUDE.md) for what counts as "structural".
 
 Entry: `web/index.html` → ESM import map → `web/js/app.js`.
-Served from moon's `~/containers/cloudretro-phase3/web/` (bind-mounted, read-only into container). Rsync-deployed via `/deploy-cloudplay-frontend`; no rebuild.
+Served from moon's `~/containers/cloudplay/web/` (bind-mounted, read-only into container). Rsync-deployed via `/deploy-cloudplay-frontend`; no rebuild.
 
 ```mermaid
 flowchart TB

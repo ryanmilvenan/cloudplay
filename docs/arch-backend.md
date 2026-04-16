@@ -13,7 +13,7 @@ flowchart TB
         traefik["Traefik<br/>chain-oauth2 (games.*)<br/>chain-claude-test (games-dev.*)"]
     end
 
-    subgraph container["podman: cloudretro-phase3 (on moon)"]
+    subgraph container["podman quadlet: cloudplay (on moon)"]
         subgraph coord["coordinator (cmd/coordinator)"]
             coordhub["pkg/coordinator<br/>hub · userhandlers · workerhandlers<br/>HTTP + WS"]
             coordfs["httpx.FileServer → /usr/local/share/cloud-game/web<br/>(bind-mounted)"]
@@ -78,11 +78,11 @@ flowchart TB
     client --> traefik
 
     subgraph host["moon filesystem (bind-mounted into container)"]
-        webfs["~/containers/cloudretro-phase3/web/<br/>(rsync deploys)"]
-        cfgfs["~/containers/cloudretro-phase3/config/config.yaml"]
-        romsfs["~/containers/cloudretro/games/"]
-        coresfs["~/containers/cloudretro/cores/"]
-        savesfs["~/containers/cloudretro/saves/"]
+        webfs["~/containers/cloudplay/web/<br/>(rsync deploys)"]
+        cfgfs["~/containers/cloudplay/config/config.yaml"]
+        romsfs["~/containers/cloudplay/games/"]
+        coresfs["~/containers/cloudplay/cores/"]
+        savesfs["~/containers/cloudplay/saves/"]
     end
 
     webfs -- ro bind --> coordfs

@@ -226,15 +226,21 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 		// broadcasts to every user in the room. That's wrong for rumble
 		// packets, which are per-port (encoded [0xFF, port, effect, hi, lo])
 		// — every peer was feeling the host's controller rumble. Override
-		// the callback here so rumble targets only the user whose Index
+		// the callback here so rumble goes to every user whose Index
 		// matches the rumbling port; everything else still broadcasts.
+		//
+		// Multiple users can legitimately share a port (e.g. four friends
+		// taking turns controlling player 1 on a single-player game), so
+		// every matching user receives the rumble — the loop does NOT
+		// early-return on first match. When users later stripe into
+		// distinct slots via HandleChangePlayer, each u.Index updates in
+		// place and the rumble naturally follows them.
 		r.App().SetDataCb(func(d []byte) {
 			if len(d) >= 2 && d[0] == 0xFF {
 				targetPort := int(d[1])
 				for u := range w.router.Users().Values() {
 					if u.Index == targetPort {
 						u.SendData(d)
-						return
 					}
 				}
 				return
@@ -302,6 +308,16 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 	c.log.Info().Msgf("[INPUT-DIAG] installing OnMessage user=%s idx=%d", user.Id(), user.Index)
 	var inputDiagN uint64
 	s.OnMessage = func(data []byte) {
+		// Debug hook: synthetic rumble injection for multi-user routing tests.
+		// Magic header [0xDE, 0xAD, 0xBE, 0xEF, port] → inject a max-strength
+		// rumble packet on the given port through the normal data callback,
+		// exercising the same per-port user-targeting path a core would hit.
+		if len(data) == 5 && data[0] == 0xDE && data[1] == 0xAD && data[2] == 0xBE && data[3] == 0xEF {
+			port := data[4]
+			c.log.Info().Msgf("[DEBUG-RUMBLE] synthetic inject sender=%s sender_idx=%d target_port=%d", user.Id(), user.Index, port)
+			r.App().EmitData([]byte{0xFF, port, 0, 0xFF, 0xFF})
+			return
+		}
 		n := atomic.AddUint64(&inputDiagN, 1)
 		if n <= 10 || n%300 == 0 {
 			c.log.Info().Msgf("[INPUT-DIAG] rx user=%s idx=%d n=%d bytes=%d", user.Id(), user.Index, n, len(data))

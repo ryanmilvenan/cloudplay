@@ -13,6 +13,7 @@ type App interface {
 	SetAudioCb(func(Audio))
 	SetVideoCb(func(Video))
 	SetDataCb(func([]byte))
+	EmitData([]byte)
 	Input(port int, device byte, data []byte)
 	KbMouseSupport() bool
 	VideoBackend() VideoBackend

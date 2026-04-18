@@ -1,0 +1,20 @@
+# 99-cloudplay-uinput.rules — grant the `input` group access to /dev/uinput
+# so the xemu backend's Phase-5 VirtualPad can create virtual gamepads from
+# inside the rootless cloudplay-dev / cloudplay podman containers.
+#
+# Install on moon:
+#   sudo cp systemd/99-cloudplay-uinput.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload
+#   sudo udevadm trigger /dev/uinput
+#   sudo usermod -aG input rocks   # one-time, then re-login
+#
+# The `input` group comes pre-created on modern Linux distros (typically
+# gid 104 or 996). The container's quadlet already does GroupAdd=input so
+# supplementary-group membership flows through the user namespace.
+
+KERNEL=="uinput", MODE="0660", GROUP="input", TAG+="uaccess"
+
+# Event nodes created by our virtual pads need matching group access so the
+# rootless container can read them back (e.g. evtest in the canary harness).
+SUBSYSTEM=="input", ATTRS{name}=="Microsoft X-Box 360 pad", MODE="0660", GROUP="input", TAG+="uaccess"
+SUBSYSTEM=="input", ATTRS{name}=="cloudplay-canary-pad",    MODE="0660", GROUP="input", TAG+="uaccess"

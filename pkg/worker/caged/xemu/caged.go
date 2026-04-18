@@ -42,6 +42,7 @@ type Caged struct {
 	vcap *Videocap
 	pwse *PipeWireSession
 	acap *Audiocap
+	pad  *VirtualPad
 
 	// liveFramesRecv is non-zero once the real capture path has delivered
 	// at least one frame; the stub loop then pauses its emissions so the
@@ -100,8 +101,18 @@ func (c *Caged) VideoBackend() app.VideoBackend {
 func (c *Caged) SetVideoCb(cb func(app.Video))           { c.videoCb.Store(&cb) }
 func (c *Caged) SetAudioCb(cb func(app.Audio))           { c.audioCb.Store(&cb) }
 func (c *Caged) SetDataCb(cb func([]byte))               { c.dataCb.Store(&cb) }
-func (c *Caged) EmitData(_ []byte)                       {}
-func (c *Caged) Input(_ int, _ byte, _ []byte)           {}
+func (c *Caged) EmitData(_ []byte) {}
+
+func (c *Caged) Input(port int, _ byte, data []byte) {
+	if c.pad == nil {
+		return
+	}
+	// TODO Phase 5+: route by port when we add multi-pad support. For now
+	// the single pad swallows all ports; revisit when joiner sessions ship.
+	if err := c.pad.Inject(data); err != nil {
+		c.log.Warn().Err(err).Int("port", port).Msg("[XEMU-INPUT] inject failed")
+	}
+}
 
 func (c *Caged) Start() {
 	c.mu.Lock()
@@ -197,6 +208,18 @@ func (c *Caged) startProcess() error {
 		}
 	}
 
+	if c.conf.Xemu.InputInject {
+		c.pad = &VirtualPad{
+			Log:        c.log,
+			DeviceName: "Microsoft X-Box 360 pad",
+			Port:       0,
+		}
+		if err := c.pad.Open(); err != nil {
+			c.log.Warn().Err(err).Msg("[XEMU-CAGE] virtual pad open failed; continuing without input")
+			c.pad = nil
+		}
+	}
+
 	return nil
 }
 
@@ -224,10 +247,12 @@ func (c *Caged) onRealVideoFrame(v app.Video) {
 	(*cbp)(v)
 }
 
-// teardownProcess closes audiocap, videocap, process, pipewire, xvfb if
-// present. Safe to call multiple times and when any component is nil. Order
-// matters: kill parec before the pulse server it's connected to; kill the
-// xemu process before the videocap shim closes its socket; kill xvfb last.
+// teardownProcess closes audiocap, videocap, process, pipewire, virtual pad,
+// xvfb if present. Safe to call multiple times and when any component is nil.
+// Order matters: kill parec before the pulse server it's connected to; kill
+// the xemu process before the videocap shim closes its socket; destroy the
+// uinput device after xemu exits so SDL doesn't race on a gone-away device;
+// kill xvfb last.
 func (c *Caged) teardownProcess() {
 	if c.acap != nil {
 		_ = c.acap.Close()
@@ -236,6 +261,10 @@ func (c *Caged) teardownProcess() {
 	if c.proc != nil {
 		_ = c.proc.Close()
 		c.proc = nil
+	}
+	if c.pad != nil {
+		_ = c.pad.Close()
+		c.pad = nil
 	}
 	if c.vcap != nil {
 		_ = c.vcap.Close()

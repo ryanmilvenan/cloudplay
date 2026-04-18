@@ -101,7 +101,7 @@ func (p *Process) Start() error {
 		return fmt.Errorf("xemu: hdd image: %w", err)
 	}
 
-	if err := p.writeConfig(flash, boot, hdd); err != nil {
+	if err := p.writeConfig(flash, boot, hdd, p.Conf.DvdPath); err != nil {
 		return err
 	}
 
@@ -202,7 +202,7 @@ func (p *Process) Pid() int {
 // (or the per-user equivalent), so we target that path rather than using
 // a --config-path flag. A process crash leaves the config in place; the
 // next Start() will overwrite it.
-func (p *Process) writeConfig(flash, boot, hdd string) error {
+func (p *Process) writeConfig(flash, boot, hdd, dvd string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("xemu: resolve HOME: %w", err)
@@ -213,6 +213,10 @@ func (p *Process) writeConfig(flash, boot, hdd string) error {
 	}
 	p.tomlDir = dir
 	p.tomlPath = filepath.Join(dir, "xemu.toml")
+	dvdLine := ""
+	if dvd != "" {
+		dvdLine = fmt.Sprintf("dvd_path = %q\n", dvd)
+	}
 	body := fmt.Sprintf(`[general]
 show_welcome = false
 screenshot_dir = ""
@@ -227,8 +231,8 @@ mem_limit = "64"
 bootrom_path = %q
 flashrom_path = %q
 hdd_path = %q
-eeprom_path = ""
-`, boot, flash, hdd)
+%seeprom_path = ""
+`, boot, flash, hdd, dvdLine)
 	return os.WriteFile(p.tomlPath, []byte(body), 0o644)
 }
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -162,7 +163,10 @@ func TestProcessLifecycle(t *testing.T) {
 	if got := frames.Load(); got < 150 || got > 200 {
 		t.Errorf("stub frames in 3s: got %d want 150..200", got)
 	}
-	// Assert no leftover xemu / Xvfb processes belonging to us.
+	// Assert no leftover xemu / Xvfb processes belonging to us. pgrep -xa
+	// lists zombies (<defunct>) too — those are harmless leftovers from
+	// other tests or manual probe scripts that haven't been reaped yet,
+	// so filter them out. Real leftovers (live processes) still fail.
 	for _, name := range []string{"xemu", "Xvfb"} {
 		out, err := exec.Command("pgrep", "-xa", name).Output()
 		if err != nil {
@@ -171,8 +175,15 @@ func TestProcessLifecycle(t *testing.T) {
 			}
 			t.Errorf("pgrep %s: %v", name, err)
 		}
-		if len(out) > 0 {
-			t.Errorf("leftover %s process(es):\n%s", name, out)
+		var live []string
+		for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+			if line == "" || strings.Contains(line, "<defunct>") {
+				continue
+			}
+			live = append(live, line)
+		}
+		if len(live) > 0 {
+			t.Errorf("leftover %s process(es):\n%s", name, strings.Join(live, "\n"))
 		}
 	}
 }

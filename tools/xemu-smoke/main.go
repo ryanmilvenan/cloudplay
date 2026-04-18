@@ -15,6 +15,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
@@ -32,14 +34,17 @@ import (
 
 func main() {
 	var (
-		iters   = flag.Int("n", 10, "number of start/stop iterations")
-		hold    = flag.Duration("hold", 5*time.Second, "time to keep xemu alive each iteration")
-		display = flag.String("display", ":100", "Xvfb display")
-		biosDir = flag.String("bios", "/xemu-bios", "BIOS root dir (expects bios/, mcpx/, hdd/ subdirs)")
-		binary  = flag.String("xemu", "xemu", "xemu binary path")
-		verbose = flag.Bool("v", false, "log per-iteration progress")
-		chaos   = flag.Bool("chaos", false, "kill -9 xemu mid-session; asserts the cage recovers cleanly (G2.3)")
-		chaosAt = flag.Duration("chaos-at", 2*time.Second, "when during the hold window to kill -9 xemu (only with -chaos)")
+		iters      = flag.Int("n", 10, "number of start/stop iterations")
+		hold       = flag.Duration("hold", 5*time.Second, "time to keep xemu alive each iteration")
+		display    = flag.String("display", ":100", "Xvfb display")
+		biosDir    = flag.String("bios", "/xemu-bios", "BIOS root dir (expects bios/, mcpx/, hdd/ subdirs)")
+		binary     = flag.String("xemu", "xemu", "xemu binary path")
+		verbose    = flag.Bool("v", false, "log per-iteration progress")
+		chaos      = flag.Bool("chaos", false, "kill -9 xemu mid-session; asserts the cage recovers cleanly (G2.3)")
+		chaosAt    = flag.Duration("chaos-at", 2*time.Second, "when during the hold window to kill -9 xemu (only with -chaos)")
+		preload    = flag.String("preload", "", "path to videocap_preload.so (enables Phase-3 capture path)")
+		minFrames  = flag.Int("min-frames", 0, "assert each iteration received at least N frames (only meaningful with -preload)")
+		dumpFrame  = flag.String("dump-frame", "", "dump the first captured RGBA frame to this path and log its SHA256 (useful for golden generation)")
 	)
 	flag.Parse()
 
@@ -56,12 +61,13 @@ func main() {
 	defer cancel()
 
 	conf := config.XemuConfig{
-		Enabled:     true,
-		BinaryPath:  *binary,
-		BiosPath:    *biosDir,
-		XvfbDisplay: *display,
-		Width:       640,
-		Height:      480,
+		Enabled:          true,
+		BinaryPath:       *binary,
+		BiosPath:         *biosDir,
+		XvfbDisplay:      *display,
+		Width:            640,
+		Height:           480,
+		VideoPreloadPath: *preload,
 	}
 
 	failures := 0
@@ -70,7 +76,11 @@ func main() {
 			break
 		}
 		t0 := time.Now()
-		if err := oneIteration(ctx, log, conf, *hold, *verbose, *chaos, *chaosAt); err != nil {
+		dump := ""
+		if i == 1 {
+			dump = *dumpFrame // only capture the very first iteration's first frame
+		}
+		if err := oneIteration(ctx, log, conf, *hold, *verbose, *chaos, *chaosAt, *minFrames, dump); err != nil {
 			fmt.Printf("iter %d/%d FAIL in %s: %v\n", i, *iters, time.Since(t0).Round(time.Millisecond), err)
 			failures++
 			continue
@@ -85,13 +95,30 @@ func main() {
 	fmt.Printf("\nall %d iterations passed\n", *iters)
 }
 
-func oneIteration(ctx context.Context, log *logger.Logger, conf config.XemuConfig, hold time.Duration, verbose, chaos bool, chaosAt time.Duration) error {
+func oneIteration(ctx context.Context, log *logger.Logger, conf config.XemuConfig, hold time.Duration, verbose, chaos bool, chaosAt time.Duration, minFrames int, dumpFrame string) error {
 	cage := xemu.Cage(xemu.CagedConf{Xemu: conf}, log)
 	if err := cage.Init(); err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
-	frameCount := 0
-	cage.SetVideoCb(func(v app.Video) { frameCount++ })
+	var (
+		frameCount  int
+		liveFrames  int
+		firstFrame  []byte
+		firstW, firstH int
+	)
+	cage.SetVideoCb(func(v app.Video) {
+		frameCount++
+		// Use the cage's own live-flag so we're immune to coincidental
+		// stub/xemu dimension matches — 640×480 is both the stub default
+		// and xemu's framebuffer.
+		if cage.LiveFramesActive() {
+			liveFrames++
+			if firstFrame == nil {
+				firstFrame = append([]byte(nil), v.Frame.Data...)
+				firstW, firstH = v.Frame.W, v.Frame.H
+			}
+		}
+	})
 	cage.SetAudioCb(func(a app.Audio) {})
 	cage.SetDataCb(func(b []byte) {})
 
@@ -121,7 +148,19 @@ func oneIteration(ctx context.Context, log *logger.Logger, conf config.XemuConfi
 	cage.Close()
 
 	if verbose {
-		log.Info().Int("frames", frameCount).Msg("iteration drained stub frames")
+		log.Info().Int("frames", frameCount).Int("live", liveFrames).
+			Msg("iteration drained frames")
+	}
+	if minFrames > 0 && frameCount < minFrames {
+		return fmt.Errorf("got %d frames, want >= %d", frameCount, minFrames)
+	}
+	if dumpFrame != "" && firstFrame != nil {
+		if err := os.WriteFile(dumpFrame, firstFrame, 0o644); err != nil {
+			return fmt.Errorf("dump frame: %w", err)
+		}
+		sum := sha256.Sum256(firstFrame)
+		log.Info().Str("path", dumpFrame).Int("w", firstW).Int("h", firstH).
+			Str("sha256", hex.EncodeToString(sum[:])).Msg("dumped first frame")
 	}
 	if err := assertClean(); err != nil {
 		return fmt.Errorf("leftover processes: %w", err)

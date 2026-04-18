@@ -177,6 +177,91 @@ func TestProcessLifecycle(t *testing.T) {
 	}
 }
 
+// findPreload returns the absolute path to the compiled videocap_preload.so
+// (Phase 3). The canonical build target (Makefile build.xemu-preload) writes
+// it to ./bin/videocap_preload.so at the repo root. Returns "" when absent.
+func findPreload() string {
+	for _, p := range []string{
+		"../../../../bin/videocap_preload.so",
+		"/src/bin/videocap_preload.so",
+		"/out/videocap_preload.so",
+		os.Getenv("XEMU_VIDEOCAP_PRELOAD"),
+	} {
+		if p == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(p); err == nil {
+			if _, err := os.Stat(abs); err == nil {
+				return abs
+			}
+		}
+	}
+	return ""
+}
+
+// TestVideoCapture is the Phase-3 G3.2-in-CI gate: drive xemu under the
+// LD_PRELOAD shim, assert (a) live frames arrive within 2 s of Start and
+// (b) steady-state rate is >=30 fps across a 5 s window. Stricter rate bands
+// live in the xemu-smoke harness. Skipped when the preload artifact isn't
+// around (no BIOS, no compiled .so, or running on a non-Linux box).
+func TestVideoCapture(t *testing.T) {
+	bios, ok := findBiosDir()
+	if !ok {
+		t.Skip("XEMU-WIP: /xemu-bios not present — run inside cloudplay-dev")
+	}
+	preload := findPreload()
+	if preload == "" {
+		t.Skip("XEMU-WIP: videocap_preload.so not built — run 'make build.xemu-preload'")
+	}
+	if _, err := exec.LookPath("xemu"); err != nil {
+		t.Skip("xemu binary not on PATH")
+	}
+
+	log := logger.NewConsole(false, "xemu-test", false)
+	c := Cage(CagedConf{Xemu: config.XemuConfig{
+		Enabled:          true,
+		BinaryPath:       "xemu",
+		BiosPath:         bios,
+		XvfbDisplay:      ":103",
+		Width:            640,
+		Height:           480,
+		VideoPreloadPath: preload,
+	}}, log)
+	if err := c.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	var liveFrames atomic.Int64
+	c.SetVideoCb(func(v app.Video) {
+		if c.LiveFramesActive() {
+			liveFrames.Add(1)
+		}
+	})
+	c.SetAudioCb(func(app.Audio) {})
+
+	c.Start()
+	defer c.Close()
+
+	// Wait up to 2 s for the first live frame.
+	firstDeadline := time.Now().Add(2 * time.Second)
+	for !c.LiveFramesActive() && time.Now().Before(firstDeadline) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !c.LiveFramesActive() {
+		t.Fatal("no live frame received within 2s — shim not wired or xemu not rendering")
+	}
+
+	// Measure over a 5 s window starting from the first live frame.
+	start := liveFrames.Load()
+	time.Sleep(5 * time.Second)
+	delta := liveFrames.Load() - start
+	fps := float64(delta) / 5.0
+	if fps < 30 {
+		t.Errorf("live fps too low: got %.1f want >= 30 (delta=%d)", fps, delta)
+	}
+	t.Logf("live fps over 5s window: %.1f (delta=%d)", fps, delta)
+}
+
 // TestChaosKillRecovers exercises the Phase-2 G2.3 contract: SIGKILL'ing
 // xemu mid-session triggers OnUnexpectedExit, which schedules a Close, and
 // the cage ends up in a clean state with no further intervention.

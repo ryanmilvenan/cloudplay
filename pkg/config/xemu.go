@@ -26,4 +26,9 @@ type XemuConfig struct {
 	// resolution negotiation will come in a later phase.
 	Width  int
 	Height int
+
+	// VideoPreloadPath points at the compiled videocap_preload.so used by
+	// Phase 3's LD_PRELOAD-based GL capture path. Empty disables capture
+	// (xemu runs but no frames leave the process — stub-emitter stays live).
+	VideoPreloadPath string `yaml:"videoPreloadPath"`
 }

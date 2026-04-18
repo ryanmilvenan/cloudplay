@@ -38,6 +38,12 @@ type Process struct {
 	// Display overrides Conf.XvfbDisplay when set (lets callers reuse the
 	// same config across sessions with distinct displays).
 	Display string
+	// PreloadPath is the path to videocap_preload.so. When set, LD_PRELOAD
+	// is pushed into xemu's env so the shim captures frames via glXSwapBuffers.
+	PreloadPath string
+	// VideocapSock is the Unix socket the preload shim will connect to.
+	// Required when PreloadPath is set; exported via CLOUDPLAY_VIDEOCAP_SOCKET.
+	VideocapSock string
 	// Log receives lifecycle + stdout/stderr.
 	Log *logger.Logger
 	// OnUnexpectedExit is invoked from the waiter goroutine when xemu dies
@@ -93,11 +99,18 @@ func (p *Process) Start() error {
 	}
 
 	p.cmd = exec.Command(bin)
-	p.cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"DISPLAY="+display,
 		// Headless audio — Phase 4 swaps this for a PipeWire capture sink.
 		"SDL_AUDIODRIVER=dummy",
 	)
+	if p.PreloadPath != "" {
+		env = append(env, "LD_PRELOAD="+p.PreloadPath)
+		if p.VideocapSock != "" {
+			env = append(env, "CLOUDPLAY_VIDEOCAP_SOCKET="+p.VideocapSock)
+		}
+	}
+	p.cmd.Env = env
 	p.cmd.Stdout = newStreamLogger(p.Log, "[XEMU-PROC] ")
 	p.cmd.Stderr = newStreamLogger(p.Log, "[XEMU-PROC] ")
 	// New process group so we can signal xemu + any child threads cleanly.
@@ -111,6 +124,7 @@ func (p *Process) Start() error {
 	p.waitCh = make(chan struct{})
 	p.Log.Info().Int("pid", p.cmd.Process.Pid).Str("display", display).
 		Str("flash", flash).Str("boot", boot).Str("hdd", hdd).
+		Str("preload", p.PreloadPath).Str("videocap_sock", p.VideocapSock).
 		Msg("[XEMU-PROC] started")
 
 	go p.waitLoop()

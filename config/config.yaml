@@ -326,3 +326,12 @@ webrtc:
   singlePort: null
   iceIpMap: null
   logLevel: 6
+# Native (non-libretro) emulator backend — xemu (original Xbox).
+# Disabled by default. Enable per-host once the BIOS dir and binary are in place.
+xemu:
+  enabled: false
+  binaryPath: /usr/local/bin/xemu
+  biosPath: /xemu-bios
+  xvfbDisplay: ':100'
+  width: 640
+  height: 480

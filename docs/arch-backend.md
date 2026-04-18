@@ -22,7 +22,7 @@ flowchart TB
             room["pkg/worker/room<br/>GameSession · broadcastRoomMembers"]
             coordh["pkg/worker/coordinatorhandlers.go"]
             media["pkg/worker/media<br/>pipe: core frame → encoder → WebRTC"]
-            caged["pkg/worker/caged<br/>libretro loader + lifecycle"]
+            caged["pkg/worker/caged<br/>backend registry (Manager)<br/>libretro · xemu"]
             recorder["pkg/worker/recorder"]
             cloud["pkg/worker/cloud (saves)"]
         end
@@ -31,6 +31,13 @@ flowchart TB
             graphics["graphics/<br/>gl + vulkan HW render"]
             manager["manager<br/>core discovery"]
             thread["thread<br/>main-thread pinning"]
+        end
+        subgraph xemu["pkg/worker/caged/xemu"]
+            xcaged["caged.go<br/>app.App impl (Phase 1: stub gradient)"]
+            xproc["process.go · xvfb.go<br/>(Phase 2)"]
+            xvideo["videocap_preload.c · videocap.go<br/>LD_PRELOAD GL capture (Phase 3)"]
+            xaudio["audiocap.go<br/>pw-record (Phase 4)"]
+            xinput["input.go<br/>uinput virtual gamepad (Phase 5)"]
         end
         subgraph encpkg["pkg/encoder"]
             yuv["yuv<br/>RGBA→I420"]
@@ -58,10 +65,16 @@ flowchart TB
         coordhub -- gRPC-like over WS --> coordh
         coordh --> room
         room --> caged
-        caged --> nanoarch
+        caged --> libretro
+        caged --> xemu
         nanoarch <-.cgo.-> corelib["libretro core<br/>(lrps2, mupen64plus, …)"]
         nanoarch --> graphics
         graphics --> media
+        xcaged -.spawns.-> xproc
+        xproc <-.ld_preload.-> xemuproc["xemu process<br/>(external, Xvfb-backed)"]
+        xvideo --> media
+        xaudio --> media
+        xinput --> xproc
         media --> yuv
         media --> nvenc
         media --> h264
@@ -92,7 +105,7 @@ flowchart TB
     savesfs -- rw bind --> cloud
 
     classDef ext fill:#e2e3e5,stroke:#383d41;
-    class client,corelib,traefik,ingress ext;
+    class client,corelib,xemuproc,traefik,ingress ext;
 ```
 
 ## Notable invariants
@@ -104,3 +117,4 @@ flowchart TB
 - **One container, two processes**: coordinator and worker share the image. Dockerfile.run's CMD supervises worker restarts; a hard crash keeps coordinator alive and the supervisor forks a fresh worker.
 - **Bind-mounted paths** let a `web/` rsync deploy in seconds, a config.yaml edit + `systemctl restart` avoid a rebuild, and ROM/core/save directories be managed independently of the image.
 - **GPU access uses CDI** (`AddDevice=nvidia.com/gpu=all`), not hand-curated driver-versioned bind mounts, so the quadlet survives NVIDIA driver upgrades without edits.
+- **Second backend via native process**: `pkg/worker/caged/xemu` runs xemu as an external OS process alongside libretro. `caged.Manager` dispatches on `ModName` (`libretro` / `xemu`); `app.App` is the shared contract so `room/` and `media/` stay backend-agnostic. As of Phase 1 the xemu backend is a frame-generating stub; Phase 2+ adds real process / capture / input primitives. xemu stays off by default (`xemu.enabled: false`).

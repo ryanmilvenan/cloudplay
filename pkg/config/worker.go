@@ -20,6 +20,7 @@ type WorkerConfig struct {
 	Worker    Worker
 	Webrtc    Webrtc
 	Version   Version
+	Xemu      XemuConfig
 }
 
 type Storage struct {

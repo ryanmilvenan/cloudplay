@@ -84,8 +84,9 @@ run_tests() {
     say "go test -tags static,st,vulkan,nvenc $* (inside $CONTAINER)"
     # Build tags must match the production build; several packages
     # reference tag-gated NVENC/Vulkan types that won't compile otherwise.
+    # -lm is required for pkg/encoder/h264's libx264 static-linked tests.
     # shellcheck disable=SC2086
-    remote_exec sh -c "'cd /src && go test -tags static,st,vulkan,nvenc $*'"
+    remote_exec sh -c "'cd /src && CGO_LDFLAGS=\"-lm\" go test -tags static,st,vulkan,nvenc $*'"
 }
 
 run_harness() {

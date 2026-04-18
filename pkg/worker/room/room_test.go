@@ -109,7 +109,19 @@ func TestMain(m *testing.M) {
 	thread.Wrap(func() { os.Exit(m.Run()) })
 }
 
+// skipIfNoFixtures bails out of tests that need both the gitignored
+// assets/games/ ROM set and a working video device (GL/Vulkan) for the
+// libretro cage. The dev-sync bind-mount excludes the ROMs, so these tests
+// would fail spuriously. See docs/test-hygiene-todo.md.
+func skipIfNoFixtures(t *testing.T) {
+	t.Helper()
+	if _, err := os.Stat("../../../assets/games/gba/Sushi The Cat.gba"); err != nil {
+		t.Skip("XEMU-WIP: assets/games fixtures missing; see docs/test-hygiene-todo.md")
+	}
+}
+
 func TestRoom(t *testing.T) {
+	skipIfNoFixtures(t)
 	tests := []testParams{
 		{game: alwas, codecs: []codec{encoder.H264, encoder.VP8, encoder.VP9}, frames: 300},
 	}
@@ -124,6 +136,7 @@ func TestRoom(t *testing.T) {
 }
 
 func TestAll(t *testing.T) {
+	skipIfNoFixtures(t)
 	tests := []testParams{
 		{game: sushi, frames: 150, color: 2},
 		{game: alwas, frames: 50, color: 1},

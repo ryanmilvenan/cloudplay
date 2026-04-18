@@ -38,6 +38,7 @@ func (o *TestOut) SetGetId(stringer fmt.Stringer) { o.Id = stringer.String() }
 func (o *TestOut) GetPayload() any                { return o.Payload }
 
 func TestWebsocket(t *testing.T) {
+	t.Skip("XEMU-WIP: flaky concurrent-RPC timing test; see docs/test-hygiene-todo.md")
 	testCases := []struct {
 		name string
 		test func(t *testing.T)

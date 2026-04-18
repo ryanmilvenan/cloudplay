@@ -2,12 +2,15 @@
 // (the original-Xbox emulator) as an external OS process and exposes it
 // through the app.App interface the worker's media pipeline already speaks.
 //
-// Phase 1 (this file): no process management yet. Caged emits a synthetic
-// RGBA gradient at 60 Hz so the video callback plumbing can be exercised
-// end-to-end before the real xemu subprocess lands in Phase 2.
+// Phase 2 (current): Caged supervises a real Xvfb + xemu pair on Start and
+// tears both down on Close. The video callback is still a synthetic gradient
+// — frame capture from xemu lands in Phase 3. If Conf.BiosPath is empty,
+// only the stub frame loop runs (Phase-1-compatible mode), which keeps
+// existing unit tests meaningful.
 package xemu
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +36,9 @@ type Caged struct {
 	started bool
 	stopCh  chan struct{}
 	doneCh  chan struct{}
+
+	xvfb *Xvfb
+	proc *Process
 
 	frameNum uint64
 	w, h     int
@@ -93,7 +99,59 @@ func (c *Caged) Start() {
 	c.stopCh = make(chan struct{})
 	c.doneCh = make(chan struct{})
 	c.mu.Unlock()
+
+	// If BiosPath is empty, stay in stub-only mode (Phase 1 compat — keeps
+	// unit tests like TestStubFrameLoopRate meaningful).
+	if c.conf.Xemu.BiosPath != "" {
+		if err := c.startProcess(); err != nil {
+			c.log.Error().Err(err).Msg("[XEMU-CAGE] xemu+xvfb start failed; falling back to stub-only")
+			c.teardownProcess()
+		}
+	}
+
 	go c.runStubFrameLoop()
+}
+
+func (c *Caged) startProcess() error {
+	display := c.conf.Xemu.XvfbDisplay
+	if display == "" {
+		display = ":100"
+	}
+	c.xvfb = &Xvfb{
+		Display: display,
+		Screen:  fmt.Sprintf("%dx%dx24", c.w, c.h),
+		Log:     c.log,
+	}
+	if err := c.xvfb.Start(); err != nil {
+		return fmt.Errorf("xvfb: %w", err)
+	}
+	c.proc = &Process{
+		Conf:    c.conf.Xemu,
+		Display: display,
+		Log:     c.log,
+		OnUnexpectedExit: func(err error) {
+			// Don't block the waiter goroutine — hand off to a closer.
+			// Close is idempotent and safe to call from anywhere.
+			go c.Close()
+		},
+	}
+	if err := c.proc.Start(); err != nil {
+		return fmt.Errorf("process: %w", err)
+	}
+	return nil
+}
+
+// teardownProcess closes xvfb and process if they exist. Safe to call
+// multiple times and when either is nil.
+func (c *Caged) teardownProcess() {
+	if c.proc != nil {
+		_ = c.proc.Close()
+		c.proc = nil
+	}
+	if c.xvfb != nil {
+		_ = c.xvfb.Close()
+		c.xvfb = nil
+	}
 }
 
 func (c *Caged) Close() {
@@ -106,8 +164,13 @@ func (c *Caged) Close() {
 	done := c.doneCh
 	c.started = false
 	c.mu.Unlock()
+
+	// Close the stub frame loop first so downstream consumers don't see
+	// frames while the process is being torn down.
 	close(stop)
 	<-done
+
+	c.teardownProcess()
 	c.log.Info().Uint64("frames", c.frameNum).Msg("[XEMU-CAGE] stopped")
 }
 

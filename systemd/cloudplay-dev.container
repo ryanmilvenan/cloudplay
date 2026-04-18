@@ -21,8 +21,11 @@ GroupAdd=input
 # Source tree and build-output lanes (rsync target + go build output).
 Volume=/home/rocks/containers/cloudplay-dev/src:/src:z
 Volume=/home/rocks/containers/cloudplay-dev/out:/out:z
-# Optional: xemu BIOS files (MCPX + flash) if the user has supplied them.
-Volume=/home/rocks/containers/cloudplay-dev/xemu-bios:/xemu-bios:ro,z
+# xemu BIOS + HDD. Must be rw because the Xbox HDD image is a qcow2 that
+# xemu writes back to for save games, dashboard settings, eeprom, etc.
+# BIOS roms under /xemu-bios/bios and /xemu-bios/mcpx are effectively static
+# but we keep the whole dir on one mount for simplicity.
+Volume=/home/rocks/containers/cloudplay-dev/xemu-bios:/xemu-bios:z
 # Optional: test ROMs for harness use.
 Volume=/home/rocks/containers/cloudplay-dev/games:/games:ro,z
 

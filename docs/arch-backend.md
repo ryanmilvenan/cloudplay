@@ -33,8 +33,8 @@ flowchart TB
             thread["thread<br/>main-thread pinning"]
         end
         subgraph xemu["pkg/worker/caged/xemu"]
-            xcaged["caged.go<br/>app.App impl (Phase 1: stub gradient)"]
-            xproc["process.go · xvfb.go<br/>(Phase 2)"]
+            xcaged["caged.go<br/>app.App impl<br/>(stub gradient while xemu boots)"]
+            xproc["process.go · xvfb.go<br/>xemu + Xvfb lifecycle (Phase 2)"]
             xvideo["videocap_preload.c · videocap.go<br/>LD_PRELOAD GL capture (Phase 3)"]
             xaudio["audiocap.go<br/>pw-record (Phase 4)"]
             xinput["input.go<br/>uinput virtual gamepad (Phase 5)"]

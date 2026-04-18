@@ -9,14 +9,21 @@ Image=localhost/cloudplay-dev:latest
 
 # Match production sandboxing so GL/NVENC behavior is identical.
 SecurityLabelDisable=true
-PodmanArgs=--security-opt seccomp=unconfined
+# --security-opt seccomp=unconfined: libretro cores + NVIDIA userspace.
+# --group-add keep-groups: propagates rocks's supplementary groups (notably
+# the host's `input` gid 104) into the container namespace so /dev/uinput
+# under mode 0660 root:input is writable. Without this, the container's
+# GroupAdd=input creates a *separate* gid 996 that doesn't match the host.
+PodmanArgs=--security-opt seccomp=unconfined --group-add keep-groups
 
 # GPU + uinput passthrough.
 AddDevice=/dev/dri
 AddDevice=nvidia.com/gpu=all
 AddDevice=/dev/uinput
-# input group so the container can write /dev/uinput
-GroupAdd=input
+# Bind-mount the whole /dev/input tree so the event nodes created by our
+# VirtualPad (via UI_DEV_CREATE) are visible inside the container. AddDevice
+# only exposes specific nodes; we can't predict which eventN udev will assign.
+Volume=/dev/input:/dev/input
 
 # Source tree and build-output lanes (rsync target + go build output).
 Volume=/home/rocks/containers/cloudplay-dev/src:/src:z

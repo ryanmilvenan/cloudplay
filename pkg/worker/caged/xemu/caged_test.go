@@ -1,6 +1,7 @@
 package xemu
 
 import (
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -338,6 +339,105 @@ func TestAudioCapture(t *testing.T) {
 		t.Errorf("audio flow too slow: got %d chunks in 2s want >=100", delta)
 	}
 	t.Logf("audio chunks/2s=%d (~%d Hz)", delta, delta/2)
+}
+
+// TestVirtualPadInjection is the Phase-5 G5.1-in-CI gate. It creates a
+// VirtualPad directly (without the full Caged), injects a press+release
+// sequence, and reads evdev events back via the kernel's own event node,
+// asserting the KEY events arrived with the right codes and values.
+// Skipped when /dev/uinput isn't writable (no permission, no module, etc.).
+func TestVirtualPadInjection(t *testing.T) {
+	// Fail fast if /dev/uinput is missing or not writable — saves the test
+	// from a misleading "virtual pad not open" error deeper in the flow.
+	if _, err := os.Stat("/dev/uinput"); err != nil {
+		t.Skip("XEMU-WIP: /dev/uinput not present — run inside cloudplay-dev")
+	}
+	f, err := os.OpenFile("/dev/uinput", os.O_WRONLY, 0)
+	if err != nil {
+		t.Skipf("XEMU-WIP: cannot open /dev/uinput (%v); see docs/test-hygiene-todo.md", err)
+	}
+	_ = f.Close()
+
+	log := logger.NewConsole(false, "xemu-test", false)
+	pad := &VirtualPad{Log: log, DeviceName: "cloudplay-unit-test-pad"}
+	if err := pad.Open(); err != nil {
+		t.Fatalf("pad open: %v", err)
+	}
+	defer pad.Close()
+
+	// Locate the event node — udev can be slow by a hundred ms or so.
+	var path string
+	for i := 0; i < 40; i++ {
+		path = pad.DevicePath()
+		if path != "" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if path == "" {
+		t.Fatal("could not find event node")
+	}
+	t.Logf("our event node: %s", path)
+
+	// Open for reading so we can verify the kernel delivers our events.
+	rfd, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		t.Skipf("XEMU-WIP: cannot open %s for reading (%v)", path, err)
+	}
+	defer rfd.Close()
+
+	// Inject "A press" using the libretro wire format — bit 0 = south/A.
+	var pkt [14]byte
+	pkt[0] = 0x01 // bit 0 set
+	if err := pad.Inject(pkt[:]); err != nil {
+		t.Fatalf("inject press: %v", err)
+	}
+	// Inject "A release" (all zero).
+	var zero [14]byte
+	if err := pad.Inject(zero[:]); err != nil {
+		t.Fatalf("inject release: %v", err)
+	}
+
+	// Read with a short deadline — the kernel buffer already has the events,
+	// we just need to slurp them. Set a 1s SetReadDeadline-equivalent via
+	// a small busy loop on the nonblocking fd via a goroutine.
+	done := make(chan []byte, 1)
+	go func() {
+		// Each input_event is 24 bytes on x86_64.
+		buf := make([]byte, 24*16)
+		n, _ := rfd.Read(buf)
+		done <- buf[:n]
+	}()
+
+	var evBytes []byte
+	select {
+	case evBytes = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out reading events from our own uinput device")
+	}
+	if len(evBytes) < 48 {
+		t.Fatalf("got %d bytes, expected at least 48 (2 KEY events + 2 SYNs × 24)", len(evBytes))
+	}
+
+	// Scan for the BTN_SOUTH events (code 0x130 = 304).
+	var sawPress, sawRelease bool
+	for off := 0; off+24 <= len(evBytes); off += 24 {
+		typ := binary.LittleEndian.Uint16(evBytes[off+16 : off+18])
+		code := binary.LittleEndian.Uint16(evBytes[off+18 : off+20])
+		val := int32(binary.LittleEndian.Uint32(evBytes[off+20 : off+24]))
+		if typ == 1 && code == 0x130 && val == 1 {
+			sawPress = true
+		}
+		if typ == 1 && code == 0x130 && val == 0 {
+			sawRelease = true
+		}
+	}
+	if !sawPress {
+		t.Error("no BTN_SOUTH press event observed")
+	}
+	if !sawRelease {
+		t.Error("no BTN_SOUTH release event observed")
+	}
 }
 
 // TestChaosKillRecovers exercises the Phase-2 G2.3 contract: SIGKILL'ing

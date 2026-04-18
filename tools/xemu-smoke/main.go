@@ -47,6 +47,7 @@ func main() {
 		dumpFrame  = flag.String("dump-frame", "", "dump the first captured RGBA frame to this path and log its SHA256 (useful for golden generation)")
 		audio      = flag.Bool("audio", false, "enable Phase-4 PipeWire audio capture (requires pulseaudio-utils and pipewire in the container)")
 		minAudio   = flag.Int("min-audio-chunks", 0, "assert each iteration received at least N audio chunks (only meaningful with -audio)")
+		input      = flag.Bool("input", false, "enable Phase-5 uinput virtual gamepad (requires /dev/uinput writable)")
 	)
 	flag.Parse()
 
@@ -71,6 +72,7 @@ func main() {
 		Height:           480,
 		VideoPreloadPath: *preload,
 		AudioCapture:     *audio,
+		InputInject:      *input,
 	}
 
 	failures := 0

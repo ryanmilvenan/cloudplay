@@ -44,4 +44,11 @@ type XemuConfig struct {
 	// make this per-game dynamic via the library metadata; for Phase 4
 	// testing it lets the harness point xemu at a homebrew ISO.
 	DvdPath string `yaml:"dvdPath"`
+
+	// InputInject toggles Phase-5's uinput virtual Xbox 360 gamepad.
+	// When true, Caged.Start creates a /dev/uinput device that SDL-hotplug
+	// surfaces to xemu, and the cage's Input(port, device, data) forwards
+	// packets into it. Requires /dev/uinput access (quadlet: AddDevice +
+	// GroupAdd=input).
+	InputInject bool `yaml:"inputInject"`
 }

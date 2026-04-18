@@ -1,0 +1,50 @@
+[Unit]
+Description=Cloudplay dev container (long-lived iteration harness)
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=cloudplay-dev
+Image=localhost/cloudplay-dev:latest
+
+# Match production sandboxing so GL/NVENC behavior is identical.
+SecurityLabelDisable=true
+PodmanArgs=--security-opt seccomp=unconfined
+
+# GPU + uinput passthrough.
+AddDevice=/dev/dri
+AddDevice=nvidia.com/gpu=all
+AddDevice=/dev/uinput
+# input group so the container can write /dev/uinput
+GroupAdd=input
+
+# Source tree and build-output lanes (rsync target + go build output).
+Volume=/home/rocks/containers/cloudplay-dev/src:/src:z
+Volume=/home/rocks/containers/cloudplay-dev/out:/out:z
+# Optional: xemu BIOS files (MCPX + flash) if the user has supplied them.
+Volume=/home/rocks/containers/cloudplay-dev/xemu-bios:/xemu-bios:ro,z
+# Optional: test ROMs for harness use.
+Volume=/home/rocks/containers/cloudplay-dev/games:/games:ro,z
+
+# Mirror production's Vulkan ICD + display env so behavior matches.
+Volume=/usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro
+Environment=DISPLAY=:99
+Environment=MESA_GL_VERSION_OVERRIDE=4.5
+Environment=NVIDIA_DRIVER_CAPABILITIES=all
+Environment=LD_LIBRARY_PATH=/lib64:/usr/lib64:/usr/lib:/lib
+Environment=__GLX_VENDOR_LIBRARY_NAME=nvidia
+Environment=GOCACHE=/go/cache
+
+# No PublishPort — we drive the container exclusively via `podman exec`.
+# If you want to run the full worker here against a browser, uncomment and
+# pick a distinct port from production (prod uses 8009/tcp + 9753/udp).
+#PublishPort=0.0.0.0:8010:8000/tcp
+#PublishPort=0.0.0.0:9754:9754/udp
+
+[Service]
+# Don't restart-loop a busted image; we'll fix and `systemctl --user restart`.
+Restart=on-failure
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

@@ -80,9 +80,12 @@ build_coordinator() {
 }
 
 run_tests() {
-    say "go test $* (inside $CONTAINER)"
+    ensure_rcheevos
+    say "go test -tags static,st,vulkan,nvenc $* (inside $CONTAINER)"
+    # Build tags must match the production build; several packages
+    # reference tag-gated NVENC/Vulkan types that won't compile otherwise.
     # shellcheck disable=SC2086
-    remote_exec sh -c "'cd /src && go test $*'"
+    remote_exec sh -c "'cd /src && go test -tags static,st,vulkan,nvenc $*'"
 }
 
 run_harness() {

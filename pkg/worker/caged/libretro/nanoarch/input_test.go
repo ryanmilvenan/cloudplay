@@ -508,7 +508,7 @@ func TestConstants(t *testing.T) {
 	}
 
 	// Limits
-	if maxPort != 4 || numAxes != 4 || RetrokLast != 342 {
+	if maxPort != 8 || numAxes != 4 || RetrokLast != 342 {
 		t.Error("invalid limit constants")
 	}
 }

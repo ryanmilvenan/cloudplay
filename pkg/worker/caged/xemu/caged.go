@@ -39,6 +39,12 @@ type Caged struct {
 
 	xvfb *Xvfb
 	proc *Process
+	vcap *Videocap
+
+	// liveFramesRecv is non-zero once the real capture path has delivered
+	// at least one frame; the stub loop then pauses its emissions so the
+	// downstream pipeline sees exactly one frame stream.
+	liveFramesRecv atomic.Bool
 
 	frameNum uint64
 	w, h     int
@@ -62,6 +68,12 @@ func Cage(conf CagedConf, log *logger.Logger) Caged {
 }
 
 func (c *Caged) Name() string { return "xemu" }
+
+// LiveFramesActive reports whether the real capture path has produced at
+// least one frame since Start. Useful for tests/harnesses that want to
+// distinguish stub-emitter frames from xemu-rendered frames without
+// needing to sample pixel dimensions.
+func (c *Caged) LiveFramesActive() bool { return c.liveFramesRecv.Load() }
 
 func (c *Caged) Init() error {
 	c.log.Info().Str("binary", c.conf.Xemu.BinaryPath).
@@ -125,10 +137,23 @@ func (c *Caged) startProcess() error {
 	if err := c.xvfb.Start(); err != nil {
 		return fmt.Errorf("xvfb: %w", err)
 	}
+
+	// Videocap must bind its Unix socket BEFORE xemu launches so the
+	// LD_PRELOAD shim sees it at the first glXSwapBuffers. The callback
+	// forwards real frames straight to the same video callback the stub
+	// loop uses; liveFramesRecv gates the stub off as soon as we have
+	// data, so downstream never sees two streams simultaneously.
+	c.vcap = &Videocap{Log: c.log}
+	if err := c.vcap.Start(c.onRealVideoFrame); err != nil {
+		return fmt.Errorf("videocap: %w", err)
+	}
+
 	c.proc = &Process{
-		Conf:    c.conf.Xemu,
-		Display: display,
-		Log:     c.log,
+		Conf:        c.conf.Xemu,
+		Display:     display,
+		VideocapSock: c.vcap.SocketPath(),
+		PreloadPath: c.conf.Xemu.VideoPreloadPath,
+		Log:         c.log,
 		OnUnexpectedExit: func(err error) {
 			// Don't block the waiter goroutine — hand off to a closer.
 			// Close is idempotent and safe to call from anywhere.
@@ -141,12 +166,32 @@ func (c *Caged) startProcess() error {
 	return nil
 }
 
-// teardownProcess closes xvfb and process if they exist. Safe to call
-// multiple times and when either is nil.
+// onRealVideoFrame receives frames from the videocap receiver and forwards
+// them to the currently-registered video callback. First live frame flips
+// liveFramesRecv so the stub loop stops emitting.
+func (c *Caged) onRealVideoFrame(v app.Video) {
+	if c.liveFramesRecv.CompareAndSwap(false, true) {
+		c.log.Info().Int("w", v.Frame.W).Int("h", v.Frame.H).
+			Msg("[XEMU-CAGE] first live frame — stub emitter parked")
+	}
+	cbp := c.videoCb.Load()
+	if cbp == nil {
+		return
+	}
+	(*cbp)(v)
+}
+
+// teardownProcess closes videocap, process, xvfb if present. Safe to call
+// multiple times and when any component is nil. Order: videocap first so
+// the shim's final send gets through, then process, then the display.
 func (c *Caged) teardownProcess() {
 	if c.proc != nil {
 		_ = c.proc.Close()
 		c.proc = nil
+	}
+	if c.vcap != nil {
+		_ = c.vcap.Close()
+		c.vcap = nil
 	}
 	if c.xvfb != nil {
 		_ = c.xvfb.Close()
@@ -189,6 +234,12 @@ func (c *Caged) runStubFrameLoop() {
 		case <-c.stopCh:
 			return
 		case <-tick.C:
+			// Park the stub emitter once the real capture path produces
+			// frames — otherwise the encoder would see two interleaved
+			// streams and everything downstream breaks.
+			if c.liveFramesRecv.Load() {
+				continue
+			}
 			cbp := c.videoCb.Load()
 			if cbp == nil {
 				continue

@@ -33,9 +33,9 @@ flowchart TB
             thread["thread<br/>main-thread pinning"]
         end
         subgraph xemu["pkg/worker/caged/xemu"]
-            xcaged["caged.go<br/>app.App impl<br/>(stub gradient while xemu boots)"]
+            xcaged["caged.go<br/>app.App impl<br/>stub emitter → real frames at first SwapWindow"]
             xproc["process.go · xvfb.go<br/>xemu + Xvfb lifecycle (Phase 2)"]
-            xvideo["videocap_preload.c · videocap.go<br/>LD_PRELOAD GL capture (Phase 3)"]
+            xvideo["preload/videocap_preload.c · videocap.go<br/>LD_PRELOAD → glReadPixels → Unix socket<br/>(hooks SDL_GL_SwapWindow / glXSwapBuffers / eglSwapBuffers)"]
             xaudio["audiocap.go<br/>pw-record (Phase 4)"]
             xinput["input.go<br/>uinput virtual gamepad (Phase 5)"]
         end
@@ -117,4 +117,4 @@ flowchart TB
 - **One container, two processes**: coordinator and worker share the image. Dockerfile.run's CMD supervises worker restarts; a hard crash keeps coordinator alive and the supervisor forks a fresh worker.
 - **Bind-mounted paths** let a `web/` rsync deploy in seconds, a config.yaml edit + `systemctl restart` avoid a rebuild, and ROM/core/save directories be managed independently of the image.
 - **GPU access uses CDI** (`AddDevice=nvidia.com/gpu=all`), not hand-curated driver-versioned bind mounts, so the quadlet survives NVIDIA driver upgrades without edits.
-- **Second backend via native process**: `pkg/worker/caged/xemu` runs xemu as an external OS process alongside libretro. `caged.Manager` dispatches on `ModName` (`libretro` / `xemu`); `app.App` is the shared contract so `room/` and `media/` stay backend-agnostic. As of Phase 1 the xemu backend is a frame-generating stub; Phase 2+ adds real process / capture / input primitives. xemu stays off by default (`xemu.enabled: false`).
+- **Second backend via native process**: `pkg/worker/caged/xemu` runs xemu as an external OS process alongside libretro. `caged.Manager` dispatches on `ModName` (`libretro` / `xemu`); `app.App` is the shared contract so `room/` and `media/` stay backend-agnostic. Phase 2 added Xvfb+process lifecycle; Phase 3 added LD_PRELOAD GL capture (SDL_GL_SwapWindow → glReadPixels → Unix socket → app.Video callback at ~60 fps). The stub frame emitter is parked on the first live frame so the room only ever sees one stream. xemu stays off by default (`xemu.enabled: false`).

@@ -44,6 +44,13 @@ type Process struct {
 	// VideocapSock is the Unix socket the preload shim will connect to.
 	// Required when PreloadPath is set; exported via CLOUDPLAY_VIDEOCAP_SOCKET.
 	VideocapSock string
+	// PulseServer, if non-empty, is pushed as PULSE_SERVER so xemu's SDL
+	// audio backend connects to a specific pulse/pipewire-pulse instance.
+	// When empty, SDL_AUDIODRIVER=dummy is set (Phase-2 behavior).
+	PulseServer string
+	// PulseRuntimeDir mirrors XDG_RUNTIME_DIR for the pulse client lookup
+	// (parec/pactl peer this way). Required when PulseServer is set.
+	PulseRuntimeDir string
 	// Log receives lifecycle + stdout/stderr.
 	Log *logger.Logger
 	// OnUnexpectedExit is invoked from the waiter goroutine when xemu dies
@@ -99,11 +106,17 @@ func (p *Process) Start() error {
 	}
 
 	p.cmd = exec.Command(bin)
-	env := append(os.Environ(),
-		"DISPLAY="+display,
-		// Headless audio — Phase 4 swaps this for a PipeWire capture sink.
-		"SDL_AUDIODRIVER=dummy",
-	)
+	env := append(os.Environ(), "DISPLAY="+display)
+	if p.PulseServer != "" && p.PulseRuntimeDir != "" {
+		env = append(env,
+			"SDL_AUDIODRIVER=pulse",
+			"PULSE_SERVER="+p.PulseServer,
+			"XDG_RUNTIME_DIR="+p.PulseRuntimeDir,
+		)
+	} else {
+		// Headless no-audio path — used when AudioCapture is disabled.
+		env = append(env, "SDL_AUDIODRIVER=dummy")
+	}
 	if p.PreloadPath != "" {
 		env = append(env, "LD_PRELOAD="+p.PreloadPath)
 		if p.VideocapSock != "" {

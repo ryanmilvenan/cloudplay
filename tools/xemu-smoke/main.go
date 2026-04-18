@@ -45,6 +45,8 @@ func main() {
 		preload    = flag.String("preload", "", "path to videocap_preload.so (enables Phase-3 capture path)")
 		minFrames  = flag.Int("min-frames", 0, "assert each iteration received at least N frames (only meaningful with -preload)")
 		dumpFrame  = flag.String("dump-frame", "", "dump the first captured RGBA frame to this path and log its SHA256 (useful for golden generation)")
+		audio      = flag.Bool("audio", false, "enable Phase-4 PipeWire audio capture (requires pulseaudio-utils and pipewire in the container)")
+		minAudio   = flag.Int("min-audio-chunks", 0, "assert each iteration received at least N audio chunks (only meaningful with -audio)")
 	)
 	flag.Parse()
 
@@ -68,6 +70,7 @@ func main() {
 		Width:            640,
 		Height:           480,
 		VideoPreloadPath: *preload,
+		AudioCapture:     *audio,
 	}
 
 	failures := 0
@@ -80,7 +83,7 @@ func main() {
 		if i == 1 {
 			dump = *dumpFrame // only capture the very first iteration's first frame
 		}
-		if err := oneIteration(ctx, log, conf, *hold, *verbose, *chaos, *chaosAt, *minFrames, dump); err != nil {
+		if err := oneIteration(ctx, log, conf, *hold, *verbose, *chaos, *chaosAt, *minFrames, dump, *minAudio); err != nil {
 			fmt.Printf("iter %d/%d FAIL in %s: %v\n", i, *iters, time.Since(t0).Round(time.Millisecond), err)
 			failures++
 			continue
@@ -95,15 +98,16 @@ func main() {
 	fmt.Printf("\nall %d iterations passed\n", *iters)
 }
 
-func oneIteration(ctx context.Context, log *logger.Logger, conf config.XemuConfig, hold time.Duration, verbose, chaos bool, chaosAt time.Duration, minFrames int, dumpFrame string) error {
+func oneIteration(ctx context.Context, log *logger.Logger, conf config.XemuConfig, hold time.Duration, verbose, chaos bool, chaosAt time.Duration, minFrames int, dumpFrame string, minAudio int) error {
 	cage := xemu.Cage(xemu.CagedConf{Xemu: conf}, log)
 	if err := cage.Init(); err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
 	var (
-		frameCount  int
-		liveFrames  int
-		firstFrame  []byte
+		frameCount     int
+		liveFrames     int
+		audioChunks    int
+		firstFrame     []byte
 		firstW, firstH int
 	)
 	cage.SetVideoCb(func(v app.Video) {
@@ -119,7 +123,7 @@ func oneIteration(ctx context.Context, log *logger.Logger, conf config.XemuConfi
 			}
 		}
 	})
-	cage.SetAudioCb(func(a app.Audio) {})
+	cage.SetAudioCb(func(a app.Audio) { audioChunks++ })
 	cage.SetDataCb(func(b []byte) {})
 
 	cage.Start()
@@ -149,10 +153,14 @@ func oneIteration(ctx context.Context, log *logger.Logger, conf config.XemuConfi
 
 	if verbose {
 		log.Info().Int("frames", frameCount).Int("live", liveFrames).
+			Int("audio_chunks", audioChunks).
 			Msg("iteration drained frames")
 	}
 	if minFrames > 0 && frameCount < minFrames {
 		return fmt.Errorf("got %d frames, want >= %d", frameCount, minFrames)
+	}
+	if minAudio > 0 && audioChunks < minAudio {
+		return fmt.Errorf("got %d audio chunks, want >= %d", audioChunks, minAudio)
 	}
 	if dumpFrame != "" && firstFrame != nil {
 		if err := os.WriteFile(dumpFrame, firstFrame, 0o644); err != nil {

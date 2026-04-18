@@ -27,6 +27,12 @@ Search marker: `XEMU-WIP` (every skip calls `t.Skip("XEMU-WIP: ...")` so
 - `scripts/dev-sync.sh` test runner passes `CGO_LDFLAGS="-lm"` so `pkg/encoder/h264` links libx264 under `go test`. The prod Makefile provides this via its own LDFLAGS chain. No revisit needed unless we drop x264.
 - Tests are run with `-tags static,st,vulkan,nvenc` — matches prod.
 
+## Phase-4 notes (audio capture)
+
+- **Xbox dashboard audio is silent** with our current MCPX + flash BIOS + HDD qcow2. The PipeWire/parec pipeline correctly captures ~200 chunks/2s at the expected 48 kHz S16LE cadence, but every sample is zero. `TestAudioCapture` therefore only asserts plumbing (chunks flow at ~100 Hz); real audio signal validation is proven separately via `tools/audio-canary` against a 440 Hz sine source (peak at 440 Hz ±1 bin, 218 dB SNR). Once we load a game ISO in Phase 7 the dashboard silence stops mattering — games exercise audio immediately. If someone wants dashboard audio: try deleting `~/.local/share/xemu/xemu/eeprom.bin` so xemu regenerates it, a different BIOS, or a retail dashboard on the HDD.
+- pipewire/wireplumber emit `dbus-launch not found` warnings at startup because the dev container has no d-bus instance. Non-fatal — affects rtkit realtime priority but not capture. If audio underruns under load show up, install d-bus + start dbus-daemon in the container.
+- Pre-test cleanup: manual probe scripts leave orphan xemu / Xvfb / pipewire processes in the dev container. A `systemctl --user restart cloudplay-dev` clears them. `TestProcessLifecycle`'s pre-flight pgrep can spuriously fail on leftovers from *previous* test runs — if "leftover xemu process(es)" appears with no listed pids, that's zombies; restart the container.
+
 ## Revisit protocol
 
 When addressing this file, work top-to-bottom. Each row's fix should be its

@@ -262,6 +262,73 @@ func TestVideoCapture(t *testing.T) {
 	t.Logf("live fps over 5s window: %.1f (delta=%d)", fps, delta)
 }
 
+// TestAudioCapture is the Phase-4 G4.2-in-CI gate: with AudioCapture
+// enabled, Caged should spin up a private PipeWire session, xemu should
+// connect to it via SDL pulse, and parec should deliver S16LE chunks to
+// the audio callback. The *content* of those chunks is a secondary
+// concern — the stock Xbox dashboard with our BIOS is silent (documented
+// in docs/test-hygiene-todo.md) — so we only assert bytes flowed.
+// Real audio signal validation is covered by tools/audio-canary against
+// a deterministic sine source (G4.1).
+func TestAudioCapture(t *testing.T) {
+	bios, ok := findBiosDir()
+	if !ok {
+		t.Skip("XEMU-WIP: /xemu-bios not present — run inside cloudplay-dev")
+	}
+	if _, err := exec.LookPath("xemu"); err != nil {
+		t.Skip("xemu binary not on PATH")
+	}
+	if _, err := exec.LookPath("parec"); err != nil {
+		t.Skip("parec (pulseaudio-utils) not on PATH — run inside cloudplay-dev")
+	}
+	if _, err := exec.LookPath("pipewire"); err != nil {
+		t.Skip("pipewire not on PATH — run inside cloudplay-dev")
+	}
+
+	log := logger.NewConsole(false, "xemu-test", false)
+	c := Cage(CagedConf{Xemu: config.XemuConfig{
+		Enabled:      true,
+		BinaryPath:   "xemu",
+		BiosPath:     bios,
+		XvfbDisplay:  ":104",
+		Width:        640,
+		Height:       480,
+		AudioCapture: true,
+	}}, log)
+	if err := c.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	var chunks atomic.Int64
+	c.SetVideoCb(func(app.Video) {})
+	c.SetAudioCb(func(a app.Audio) {
+		chunks.Add(1)
+	})
+
+	c.Start()
+	defer c.Close()
+
+	// Audiocap's discovery polls pactl; first chunk should arrive within a
+	// few seconds of xemu-pulse connecting. Be generous — xemu sometimes
+	// delays opening its audio device until after BIOS init.
+	deadline := time.Now().Add(10 * time.Second)
+	for chunks.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if chunks.Load() == 0 {
+		t.Fatal("no audio chunks received within 10s — plumbing broken")
+	}
+
+	// Measure flow over a 2 s window. 10 ms per chunk → expect ~200.
+	start := chunks.Load()
+	time.Sleep(2 * time.Second)
+	delta := chunks.Load() - start
+	if delta < 100 {
+		t.Errorf("audio flow too slow: got %d chunks in 2s want >=100", delta)
+	}
+	t.Logf("audio chunks/2s=%d (~%d Hz)", delta, delta/2)
+}
+
 // TestChaosKillRecovers exercises the Phase-2 G2.3 contract: SIGKILL'ing
 // xemu mid-session triggers OnUnexpectedExit, which schedules a Close, and
 // the cage ends up in a clean state with no further intervention.

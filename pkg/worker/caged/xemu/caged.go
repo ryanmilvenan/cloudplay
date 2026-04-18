@@ -40,6 +40,8 @@ type Caged struct {
 	xvfb *Xvfb
 	proc *Process
 	vcap *Videocap
+	pwse *PipeWireSession
+	acap *Audiocap
 
 	// liveFramesRecv is non-zero once the real capture path has delivered
 	// at least one frame; the stub loop then pauses its emissions so the
@@ -148,12 +150,30 @@ func (c *Caged) startProcess() error {
 		return fmt.Errorf("videocap: %w", err)
 	}
 
+	// Optional Phase-4 audio capture. Launched BEFORE xemu so the
+	// pulse socket exists by the time xemu tries to connect. The audio
+	// callback discovery inside Audiocap polls until xemu registers a
+	// sink-input, so a short startup race is tolerated.
+	var pulseSrv, pulseRun string
+	if c.conf.Xemu.AudioCapture {
+		c.pwse = &PipeWireSession{Log: c.log}
+		if err := c.pwse.Start(); err != nil {
+			c.log.Error().Err(err).Msg("[XEMU-CAGE] pipewire start failed; audio disabled")
+			c.pwse = nil
+		} else {
+			pulseSrv = c.pwse.PulseServer()
+			pulseRun = c.pwse.RuntimeDir()
+		}
+	}
+
 	c.proc = &Process{
-		Conf:        c.conf.Xemu,
-		Display:     display,
-		VideocapSock: c.vcap.SocketPath(),
-		PreloadPath: c.conf.Xemu.VideoPreloadPath,
-		Log:         c.log,
+		Conf:            c.conf.Xemu,
+		Display:         display,
+		VideocapSock:    c.vcap.SocketPath(),
+		PreloadPath:     c.conf.Xemu.VideoPreloadPath,
+		PulseServer:     pulseSrv,
+		PulseRuntimeDir: pulseRun,
+		Log:             c.log,
 		OnUnexpectedExit: func(err error) {
 			// Don't block the waiter goroutine — hand off to a closer.
 			// Close is idempotent and safe to call from anywhere.
@@ -163,7 +183,30 @@ func (c *Caged) startProcess() error {
 	if err := c.proc.Start(); err != nil {
 		return fmt.Errorf("process: %w", err)
 	}
+
+	if c.pwse != nil {
+		c.acap = &Audiocap{
+			Log:             c.log,
+			AppName:         "xemu",
+			PulseServer:     pulseSrv,
+			PulseRuntimeDir: pulseRun,
+		}
+		if err := c.acap.Start(c.onRealAudioFrame); err != nil {
+			c.log.Warn().Err(err).Msg("[XEMU-CAGE] audiocap start failed; continuing without audio")
+			c.acap = nil
+		}
+	}
+
 	return nil
+}
+
+// onRealAudioFrame forwards captured audio chunks to the downstream callback.
+func (c *Caged) onRealAudioFrame(au app.Audio) {
+	cbp := c.audioCb.Load()
+	if cbp == nil {
+		return
+	}
+	(*cbp)(au)
 }
 
 // onRealVideoFrame receives frames from the videocap receiver and forwards
@@ -181,10 +224,15 @@ func (c *Caged) onRealVideoFrame(v app.Video) {
 	(*cbp)(v)
 }
 
-// teardownProcess closes videocap, process, xvfb if present. Safe to call
-// multiple times and when any component is nil. Order: videocap first so
-// the shim's final send gets through, then process, then the display.
+// teardownProcess closes audiocap, videocap, process, pipewire, xvfb if
+// present. Safe to call multiple times and when any component is nil. Order
+// matters: kill parec before the pulse server it's connected to; kill the
+// xemu process before the videocap shim closes its socket; kill xvfb last.
 func (c *Caged) teardownProcess() {
+	if c.acap != nil {
+		_ = c.acap.Close()
+		c.acap = nil
+	}
 	if c.proc != nil {
 		_ = c.proc.Close()
 		c.proc = nil
@@ -192,6 +240,10 @@ func (c *Caged) teardownProcess() {
 	if c.vcap != nil {
 		_ = c.vcap.Close()
 		c.vcap = nil
+	}
+	if c.pwse != nil {
+		_ = c.pwse.Close()
+		c.pwse = nil
 	}
 	if c.xvfb != nil {
 		_ = c.xvfb.Close()

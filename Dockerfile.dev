@@ -79,6 +79,7 @@ RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
     pipewire-audio \
     wireplumber \
     pipewire-bin \
+    pulseaudio-utils \
     evtest \
     wget \
     file \

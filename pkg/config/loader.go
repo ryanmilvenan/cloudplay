@@ -5,6 +5,8 @@ import (
 	"embed"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/knadh/koanf/maps"
@@ -109,7 +111,46 @@ func (e *Env) Read() (Kv, error) {
 			mp[key] = parts[1]
 		}
 	}
+	collectArrayIndexedKeys(mp)
 	return maps.Unflatten(mp, "."), nil
+}
+
+// collectArrayIndexedKeys rewrites entries whose final path segment is
+// `name[N]` into a single `name` key whose value is a slice with index N set,
+// so env overrides like CLOUD_GAME_ENCODER_AUDIO_FRAMES[0]=10 produce
+// `encoder.audio.frames = [10, ...]` instead of the literal key
+// `encoder.audio.frames[0]` which koanf's Unflatten can't route into a Go
+// slice field.
+func collectArrayIndexedKeys(mp Kv) {
+	type entry struct {
+		key string
+		idx int
+	}
+	groups := map[string][]entry{}
+	for k := range mp {
+		dot := strings.LastIndex(k, ".")
+		last := k[dot+1:]
+		open := strings.LastIndex(last, "[")
+		if open <= 0 || !strings.HasSuffix(last, "]") {
+			continue
+		}
+		idx, err := strconv.Atoi(last[open+1 : len(last)-1])
+		if err != nil || idx < 0 {
+			continue
+		}
+		base := k[:dot+1] + last[:open]
+		groups[base] = append(groups[base], entry{key: k, idx: idx})
+	}
+	for base, es := range groups {
+		sort.Slice(es, func(i, j int) bool { return es[i].idx < es[j].idx })
+		max := es[len(es)-1].idx
+		arr := make([]any, max+1)
+		for _, e := range es {
+			arr[e.idx] = mp[e.key]
+			delete(mp, e.key)
+		}
+		mp[base] = arr
+	}
 }
 
 // LoadConfig loads a configuration file into the given struct.

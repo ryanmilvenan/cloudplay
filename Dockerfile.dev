@@ -1,0 +1,98 @@
+
+# Long-lived dev container for cloudplay iteration.
+#
+# Purpose: same build toolchain as production (Go + CGo deps for NVENC/Vulkan/CUDA)
+# plus xemu, xvfb, pipewire-utils, evtest, and uinput headers for native-emulator
+# work. Stays alive via `sleep infinity`; driven via `podman exec`.
+#
+# Use `scripts/dev-sync.sh` for the edit/build loop. This image is **not** built
+# by `/deploy-cloudplay` — it's its own lane via `systemd/cloudplay-dev.container`.
+
+ARG GO=1.26.0
+
+FROM ubuntu:plucky
+
+ARG GO
+ARG GO_DIST=go${GO}.linux-amd64.tar.gz
+ARG XEMU_VERSION=v0.8.5
+
+# --- Go toolchain (matches production Dockerfile) -----------------------------
+ADD https://go.dev/dl/$GO_DIST ./
+RUN tar -C /usr/local -xzf $GO_DIST && rm $GO_DIST
+ENV PATH="${PATH}:/usr/local/go/bin"
+ENV GOPATH=/go
+ENV GOCACHE=/go/cache
+RUN mkdir -p /go/cache /out /src
+
+# --- CGo build deps (mirror Dockerfile build_worker stage) --------------------
+RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
+    ca-certificates \
+    make \
+    build-essential \
+    pkg-config \
+    libopus-dev \
+    libsdl2-dev \
+    libvpx-dev \
+    libyuv-dev \
+    libjpeg-turbo8-dev \
+    libx264-dev \
+    libspeexdsp-dev \
+    libavcodec-dev \
+    libavutil-dev \
+    libvulkan-dev \
+    libegl-dev \
+    libx11-dev \
+    nvidia-cuda-toolkit \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- Runtime deps (mirror Dockerfile worker stage, needed to run the binary) --
+RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
+    curl \
+    ffmpeg \
+    libcudart12 \
+    libegl1 \
+    libvulkan1 \
+    libx11-6 \
+    libxext6 \
+ && rm -rf /var/lib/apt/lists/*
+
+ADD https://github.com/sergystepanov/mesa-llvmpipe/releases/download/v1.0.0/libGL.so.1.5.0 \
+    /usr/lib/x86_64-linux-gnu/
+RUN cd /usr/lib/x86_64-linux-gnu && \
+    ln -sf libGL.so.1.5.0 libGL.so.1 && \
+    ln -sf libGL.so.1 libGL.so
+
+# --- Native-emulator stack (new, not in production image) ---------------------
+#
+# xvfb           — headless X server for xemu's GL context
+# pipewire-utils — pw-record for audio capture
+# evtest         — uinput event capture for input harness tests
+# x11-utils      — xdpyinfo for smoke-testing the display
+# xserver-xorg-video-dummy — dummy GL driver for non-GPU-attached test paths
+RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
+    xvfb \
+    xserver-xorg-core \
+    xserver-xorg-video-dummy \
+    x11-utils \
+    pipewire \
+    pipewire-pulse \
+    pipewire-audio \
+    wireplumber \
+    pipewire-bin \
+    evtest \
+    wget \
+    file \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- xemu AppImage (extracted, no FUSE needed) --------------------------------
+RUN wget -q "https://github.com/xemu-project/xemu/releases/download/${XEMU_VERSION}/xemu-${XEMU_VERSION}-x86_64.AppImage" \
+      -O /tmp/xemu.AppImage && \
+    chmod +x /tmp/xemu.AppImage && \
+    cd /opt && /tmp/xemu.AppImage --appimage-extract && \
+    mv squashfs-root xemu && \
+    ln -s /opt/xemu/AppRun /usr/local/bin/xemu && \
+    rm /tmp/xemu.AppImage
+
+# --- Default entrypoint: stay alive, driven via `podman exec` -----------------
+WORKDIR /src
+CMD ["sleep", "infinity"]

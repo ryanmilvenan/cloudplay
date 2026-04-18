@@ -5,7 +5,7 @@
 
 Two Go binaries in one repo: **coordinator** (the thin control plane) and **worker** (per-session emulator host). Both ship as one podman image; the container's entrypoint starts coordinator and supervises worker restarts.
 
-Runtime deployment: moon bind-mounts `web/` and config.yaml; the container owns everything else in the image.
+Runtime deployment: moon bind-mounts `web/` and config.yaml; the container owns everything else in the image. The podman quadlet unit file lives at `systemd/cloudplay.container` in this repo and is the source of truth for `~/.config/containers/systemd/cloudplay.container` on moon.
 
 ```mermaid
 flowchart TB
@@ -103,3 +103,4 @@ flowchart TB
 - **Zero-copy video path**: Vulkan core → extmem → CUDA → NVENC, bypassing host CPU when the core renders via Vulkan. GL cores fall back to `readFramebuffer → yuv420 → encoder`.
 - **One container, two processes**: coordinator and worker share the image. Dockerfile.run's CMD supervises worker restarts; a hard crash keeps coordinator alive and the supervisor forks a fresh worker.
 - **Bind-mounted paths** let a `web/` rsync deploy in seconds, a config.yaml edit + `systemctl restart` avoid a rebuild, and ROM/core/save directories be managed independently of the image.
+- **GPU access uses CDI** (`AddDevice=nvidia.com/gpu=all`), not hand-curated driver-versioned bind mounts, so the quadlet survives NVIDIA driver upgrades without edits.

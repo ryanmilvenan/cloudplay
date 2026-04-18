@@ -1,0 +1,63 @@
+[Unit]
+Description=Cloudplay — games.milvenan.technology
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=cloudplay
+Image=localhost/cloudplay-run:latest
+
+# libretro cores + NVIDIA userspace need the default container sandbox relaxed.
+SecurityLabelDisable=true
+PodmanArgs=--security-opt seccomp=unconfined
+
+# GPU + display passthrough
+AddDevice=/dev/dri
+AddDevice=nvidia.com/gpu=all
+
+# External-facing ports
+PublishPort=0.0.0.0:8009:8000/tcp
+PublishPort=0.0.0.0:9753:9753/udp
+
+# Source tree (read-only, bind-mounted so rsync deploys skip a rebuild)
+Volume=/home/rocks/containers/cloudplay/config/config.yaml:/usr/local/share/cloud-game/config.yaml:ro,z
+Volume=/home/rocks/containers/cloudplay/web:/usr/local/share/cloud-game/web:ro,z
+
+# Game library
+Volume=/home/rocks/containers/cloudplay/games:/usr/local/share/cloud-game/assets/games:ro,z
+Volume=/home/rocks/containers/cloudplay/cores:/usr/local/share/cloud-game/assets/cores:ro,z
+
+# Runtime state (read-write)
+Volume=/home/rocks/containers/cloudplay/saves:/root/.cr/save:z
+Volume=/home/rocks/containers/cloudplay/libretro/system:/usr/local/share/cloud-game/libretro/system:z
+Volume=/home/rocks/containers/cloudplay/libretro/saves:/usr/local/share/cloud-game/libretro-save:z
+
+# Vulkan ICDs + NVIDIA userspace libs from host
+Volume=/usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro
+
+# Display / driver / encode environment
+Environment=DISPLAY=:99
+Environment=MESA_GL_VERSION_OVERRIDE=4.5
+Environment=NVIDIA_DRIVER_CAPABILITIES=all
+Environment=LD_LIBRARY_PATH=/lib64:/usr/lib64:/usr/lib:/lib
+Environment=__GLX_VENDOR_LIBRARY_NAME=nvidia
+Environment=CLOUDPLAY_FRAME_TIMING=1
+Environment=CLOUDPLAY_GL_BACKEND=egl
+
+# Cloud-game knobs
+Environment=CLOUD_GAME_ENCODER_VIDEO_CODEC=h264_nvenc
+Environment=CLOUD_GAME_ENCODER_VIDEO_ZEROCOPY=true
+Environment=CLOUD_GAME_WEBRTC_SINGLEPORT=9753
+Environment=CLOUD_GAME_WEBRTC_ICELITE=true
+Environment=CLOUD_GAME_WEBRTC_ICEIPMAP=107.143.179.17
+Environment=CLOUD_GAME_WORKER_NETWORK_PUBLICADDRESS=107.143.179.17
+Environment=CLOUD_GAME_COORDINATOR_SERVER_CACHECONTROL=no-store
+Environment=CLOUD_GAME_COORDINATOR_DEBUG=true
+Environment=CLOUD_GAME_WORKER_DEBUG=true
+
+[Service]
+Restart=always
+TimeoutStopSec=70
+
+[Install]
+WantedBy=default.target

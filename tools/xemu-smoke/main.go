@@ -176,21 +176,25 @@ func oneIteration(ctx context.Context, log *logger.Logger, conf config.XemuConfi
 	return nil
 }
 
-// assertClean returns nil when no xemu or Xvfb processes are running, else
-// an error describing what's still alive. Uses pgrep -x for exact-name
-// matches so "xemu-smoke" doesn't collide with "xemu".
+// assertClean returns nil when no *live* xemu or Xvfb processes are running.
+// Zombies (<defunct>) are ignored — they're harmless remnants the Go runtime
+// or pid-1 will reap. Uses pgrep -x for exact-name match so "xemu-smoke"
+// doesn't collide with "xemu".
 func assertClean() error {
 	var leftovers []string
 	for _, name := range []string{"xemu", "Xvfb"} {
 		out, err := exec.Command("pgrep", "-xa", name).Output()
 		if err != nil {
 			if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-				continue // no match = clean
+				continue
 			}
 			return fmt.Errorf("pgrep %s: %w", name, err)
 		}
-		if trimmed := strings.TrimSpace(string(out)); trimmed != "" {
-			leftovers = append(leftovers, fmt.Sprintf("%s → %s", name, trimmed))
+		for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+			if line == "" || strings.Contains(line, "<defunct>") {
+				continue
+			}
+			leftovers = append(leftovers, fmt.Sprintf("%s → %s", name, line))
 		}
 	}
 	if len(leftovers) > 0 {

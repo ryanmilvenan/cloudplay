@@ -38,4 +38,10 @@ type XemuConfig struct {
 	// callback. xemu is run with SDL_AUDIODRIVER=pulse pointing at the
 	// private session's socket.
 	AudioCapture bool `yaml:"audioCapture"`
+
+	// DvdPath, when non-empty, is written into xemu.toml's [sys.files]
+	// dvd_path so xemu mounts this ISO as the DVD at boot. Phase-6 will
+	// make this per-game dynamic via the library metadata; for Phase 4
+	// testing it lets the harness point xemu at a homebrew ISO.
+	DvdPath string `yaml:"dvdPath"`
 }

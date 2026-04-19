@@ -3,6 +3,7 @@ package worker
 import (
 	"encoding/base64"
 	"log"
+	"path/filepath"
 	"sync/atomic"
 
 	"github.com/giongto35/cloud-game/v3/pkg/api"
@@ -11,6 +12,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/games"
 	"github.com/giongto35/cloud-game/v3/pkg/network/webrtc"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged"
+	xemucage "github.com/giongto35/cloud-game/v3/pkg/worker/caged/xemu"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/media"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/room"
 	"github.com/goccy/go-json"
@@ -136,7 +138,22 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 		}
 
 		w.router.SetRoom(r)
-		c.log.Info().Str("room", r.Id()).Str("game", game.Name).Msg("New room")
+		c.log.Info().Str("room", r.Id()).Str("game", game.Name).Str("backend", game.Backend).Msg("New room")
+
+		// Phase 6 backend dispatch. The libretro path below is the
+		// original code unchanged; the xemu path early-returns after
+		// setting up its simpler pipeline (no save states, no cloud
+		// storage, no recording, no Vulkan zero-copy — all libretro-
+		// specific features that don't apply).
+		if game.Backend == "xemu" {
+			if err := c.startXemuRoom(w, r, game); err != nil {
+				c.log.Error().Err(err).Msg("xemu room start failed")
+				r.Close()
+				w.router.SetRoom(nil)
+				return api.EmptyPacket
+			}
+			goto commonStart
+		}
 
 		// start the emulator
 		app := room.WithEmulator(w.mana.Get(caged.Libretro))
@@ -293,6 +310,7 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 		r.StartApp()
 	}
 
+commonStart:
 	c.log.Debug().Msg("Start session input poll")
 
 	needsKbMouse := r.App().KbMouseSupport()
@@ -402,16 +420,29 @@ func (c *coordinator) HandleQuitGame(rq api.GameQuitRequest, w *Worker) {
 }
 
 func (c *coordinator) HandleResetGame(rq api.ResetGameRequest, w *Worker) api.Out {
-	if r := w.router.FindRoom(rq.Rid); r != nil {
-		room.WithEmulator(r.App()).Reset()
-		return api.OkPacket
+	r := w.router.FindRoom(rq.Rid)
+	if r == nil {
+		return api.ErrPacket
 	}
-	return api.ErrPacket
+	// Reset/Save/Load are libretro-only plumbing today. The xemu backend
+	// doesn't expose these in its app.App surface yet — silently refuse
+	// instead of panicking the unsafe cast. Frontend already tolerates
+	// ErrPacket here.
+	if !room.IsLibretro(r.App()) {
+		c.log.Debug().Msg("reset ignored: backend does not support reset")
+		return api.ErrPacket
+	}
+	room.WithEmulator(r.App()).Reset()
+	return api.OkPacket
 }
 
 func (c *coordinator) HandleSaveGame(rq api.SaveGameRequest, w *Worker) api.Out {
 	r := w.router.FindRoom(rq.Rid)
 	if r == nil {
+		return api.ErrPacket
+	}
+	if !room.IsLibretro(r.App()) {
+		c.log.Debug().Msg("save ignored: backend does not support save state")
 		return api.ErrPacket
 	}
 	if err := room.WithEmulator(r.App()).SaveGameState(); err != nil {
@@ -426,12 +457,61 @@ func (c *coordinator) HandleLoadGame(rq api.LoadGameRequest, w *Worker) api.Out 
 	if r == nil {
 		return api.ErrPacket
 	}
+	if !room.IsLibretro(r.App()) {
+		c.log.Debug().Msg("load ignored: backend does not support load state")
+		return api.ErrPacket
+	}
 	if err := room.WithEmulator(r.App()).RestoreGameState(); err != nil {
 		c.log.Error().Err(err).Msg("cannot load game state")
 		return api.ErrPacket
 	}
 	return api.OkPacket
 }
+
+// startXemuRoom is the xemu-specific new-room setup path. It resolves the
+// game's ISO path, pokes it into the xemu cage's DvdPath, wires the app
+// + media pipeline, and starts the cage. Skipped operations vs the
+// libretro path: ReloadFrontend, SetSessionId, SetSaveOnClose,
+// EnableCloudStorage, EnableRecording, VideoChangeCb, rcheevos load,
+// Vulkan zero-copy — none of which the xemu backend supports today.
+func (c *coordinator) startXemuRoom(w *Worker, r *room.Room[*room.GameSession], game games.GameMetadata) error {
+	appIface := w.mana.Get(caged.Xemu)
+	if appIface == nil {
+		return &xemuStartErr{what: "xemu backend not loaded (xemu.enabled=false?)"}
+	}
+	xcage, ok := appIface.(*xemucage.Caged)
+	if !ok {
+		return &xemuStartErr{what: "mana.Get(Xemu) returned unexpected type"}
+	}
+	xcage.SetDvd(filepath.Join(w.conf.Library.BasePath, game.Path))
+	r.SetApp(appIface)
+
+	m := media.NewWebRtcMediaPipe(w.conf.Encoder.Audio, w.conf.Encoder.Video, w.log)
+	m.AudioSrcHz = appIface.AudioSampleRate()
+	m.AudioFrames = w.conf.Encoder.Audio.Frames
+	m.VideoW, m.VideoH = appIface.ViewportSize()
+	m.VideoScale = appIface.Scale()
+	r.SetMedia(m)
+	if err := m.Init(); err != nil {
+		return err
+	}
+	// xemu's x11grab frames are already top-down; no flip needed. PixFmt
+	// and rotation are libretro-isms — the defaults in the encoder path
+	// work for RGBA.
+	r.BindAppMedia()
+	// Broadcast-to-all data-channel sender is fine for xemu: the backend
+	// doesn't emit per-port rumble packets today, so the targeted rumble
+	// filter from the libretro path is unnecessary.
+	appIface.SetDataCb(r.Send)
+
+	w.log.Info().Str("game", game.Name).Str("iso", game.Path).Msg("xemu room ready")
+	r.StartApp()
+	return nil
+}
+
+type xemuStartErr struct{ what string }
+
+func (e *xemuStartErr) Error() string { return e.what }
 
 func firstN(s string, n int) string {
 	if len(s) <= n {

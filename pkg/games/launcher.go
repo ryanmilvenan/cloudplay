@@ -14,12 +14,13 @@ type Launcher interface {
 }
 
 type AppMeta struct {
-	Alias  string
-	Base   string
-	Name   string
-	Path   string
-	System string
-	Type   string
+	Alias   string
+	Base    string
+	Name    string
+	Path    string
+	System  string
+	Type    string
+	Backend string
 }
 
 type GameLauncher struct {

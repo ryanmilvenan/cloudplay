@@ -78,6 +78,15 @@ func (c *Caged) Name() string { return "xemu" }
 // needing to sample pixel dimensions.
 func (c *Caged) LiveFramesActive() bool { return c.liveFramesRecv.Load() }
 
+// SetDvd configures the ISO path xemu should mount as the DVD drive on
+// the next Start. Must be called before Start; has no effect afterward.
+// Accepts an absolute or library-relative path — callers resolve that.
+func (c *Caged) SetDvd(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.conf.Xemu.DvdPath = path
+}
+
 func (c *Caged) Init() error {
 	c.log.Info().Str("binary", c.conf.Xemu.BinaryPath).
 		Str("bios", c.conf.Xemu.BiosPath).

@@ -62,6 +62,7 @@ type GameLibrary interface {
 type WithEmulatorInfo interface {
 	GetSupportedExtensions() []string
 	GetEmulator(rom string, path string) string
+	GetBackend(system string) string
 	SessionStoragePath() string
 }
 
@@ -72,6 +73,10 @@ type GameMetadata struct {
 	Path   string // the game path relative to the library base path
 	System string
 	Type   string // the game file extension (e.g. nes, n64)
+	// Backend is the caged.ModName that runs this system. "libretro" is
+	// the default; "xemu" routes to the native xemu backend. Set during
+	// library scan from the system's config entry.
+	Backend string
 }
 
 func (g GameMetadata) FullPath(base string) string {
@@ -213,6 +218,7 @@ func (lib *library) Scan() {
 
 		meta := metadata(path, dir)
 		meta.System = lib.emuConf.GetEmulator(meta.Type, meta.Path)
+		meta.Backend = lib.emuConf.GetBackend(meta.System)
 
 		if aliases != nil {
 			if k, ok := aliases[meta.Name]; ok {

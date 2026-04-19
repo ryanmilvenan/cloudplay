@@ -199,6 +199,18 @@ emulator:
             pcsx2_enable_rumble2: 100%%
             pcsx2_multitap1: enabled
             pcsx2_multitap2: enabled
+        # xbox is NOT a libretro core — it lives in this list so the
+        # standard game-library scanner can still match ROM extensions
+        # to a system name. The `backend: xemu` field tells the worker's
+        # caged manager to route matched games to pkg/worker/caged/xemu
+        # instead of pkg/worker/caged/libretro. Core-specific fields
+        # (lib, options, etc.) are deliberately empty.
+        xbox:
+          folder: xbox
+          roms:
+          - iso
+          - xiso
+          backend: xemu
         pcsx:
           lib: pcsx_rearmed_libretro
           roms:

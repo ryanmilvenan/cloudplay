@@ -45,6 +45,14 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 	if err := manager.Load(caged.Libretro, conf); err != nil {
 		return nil, fmt.Errorf("couldn't cage libretro: %v", err)
 	}
+	// Best-effort xemu bring-up: Load is a no-op when XemuConfig.Enabled
+	// is false, so existing deployments without xemu configured still
+	// start normally. When enabled, a start failure (BIOS missing,
+	// binary not installed) logs but does NOT abort worker startup —
+	// libretro still works.
+	if err := manager.Load(caged.Xemu, conf); err != nil {
+		log.Warn().Err(err).Msg("xemu backend unavailable — xbox games will fail to start")
+	}
 
 	library := games.NewLib(conf.Library, conf.Emulator, log)
 	library.Scan()

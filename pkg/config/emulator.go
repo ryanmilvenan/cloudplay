@@ -72,6 +72,10 @@ func (lrp LibretroRemoteRepo) Guess() (LibretroRepoMapInfo, error) {
 type LibretroCoreConfig struct {
 	AltRepo         bool
 	AutoGlContext   bool // hack: keep it here to pass it down the emulator
+	// Backend selects which caged.ModName handles this system. Empty or
+	// "libretro" routes through pkg/worker/caged/libretro (default).
+	// "xemu" routes through pkg/worker/caged/xemu. Phase 6+.
+	Backend         string
 	CoreAspectRatio bool
 	Folder          string
 	Hacks           []string
@@ -137,6 +141,17 @@ func (e Emulator) GetSupportedExtensions() []string {
 
 func (e Emulator) SessionStoragePath() string {
 	return e.Storage
+}
+
+// GetBackend returns the caged.ModName backend (as a lowercase string) that
+// should handle the given system. Defaults to "libretro" if the system
+// isn't in the libretro core list or if its Backend field is empty — so
+// every existing core keeps dispatching to libretro without edits.
+func (e Emulator) GetBackend(system string) string {
+	if core, ok := e.Libretro.Cores.List[system]; ok && core.Backend != "" {
+		return core.Backend
+	}
+	return "libretro"
 }
 
 func (l *LibretroConfig) GetCores() (cores []CoreInfo) {

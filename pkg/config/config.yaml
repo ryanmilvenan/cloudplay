@@ -308,6 +308,13 @@ emulator:
           options:
             pcsx2_bios: SCPH-70012_BIOS_V12_USA_200.bin
             pcsx2_renderer: Software
+        # xbox is routed to pkg/worker/caged/xemu instead of libretro
+        # via the backend field. All libretro-specific core fields are
+        # intentionally empty — xemu is self-contained.
+        xbox:
+          folder: xbox
+          roms: [ "iso", "xiso" ]
+          backend: xemu
         pcsx:
           lib: pcsx_rearmed_libretro
           roms: [ "cue", "chd" ]

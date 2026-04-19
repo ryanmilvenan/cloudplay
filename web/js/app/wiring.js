@@ -51,6 +51,7 @@ import {
 import {gameList} from '../gameList.js?v=__V__';
 import {message} from '../message.js?v=__V__';
 import * as achievementToast from '../achievementToast.js?v=__V__';
+import * as hydrateOverlay from '../hydrateOverlay.js?v=__V__';
 import {overlay} from '../overlay.js?v=__V__';
 import {recording} from '../recording.js?v=__V__';
 import {room} from '../room.js?v=__V__';
@@ -130,6 +131,12 @@ const onMessage = (m) => {
         case api.endpoint.ACHIEVEMENT_UNLOCKED:
             // {id, title, description, points, badge_url}
             if (payload?.title) achievementToast.show(payload);
+            break;
+        case api.endpoint.ROOM_HYDRATE_PROGRESS:
+            // {stage, percent, extras} — render while romcache is
+            // extracting + repacking a .7z archive. stage==='done'
+            // hides the overlay.
+            if (payload) hydrateOverlay.show(payload);
             break;
     }
 };

@@ -501,3 +501,69 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
+
+/* --- Hydrate progress overlay -------------------------------------
+   Full-viewport dim backdrop + centered card with a progress bar.
+   Shown by web/js/hydrateOverlay.js while pkg/worker/romcache is
+   extracting + repacking a .7z-archived ROM (30-90 s cost). Hidden
+   via the .hidden class on stage==='done'. */
+.hydrate-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(0, 0, 0, 0.72);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+}
+.hydrate-overlay.hidden { display: none; }
+.hydrate-overlay__box {
+    min-width: 320px;
+    max-width: 480px;
+    padding: 20px 28px;
+    background: #1a1a1e;
+    border: 1px solid #2c2c33;
+    border-radius: 8px;
+    color: #e6e6e6;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+    font-family: system-ui, sans-serif;
+}
+.hydrate-overlay__title {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    letter-spacing: 0.01em;
+}
+.hydrate-overlay__track {
+    position: relative;
+    height: 6px;
+    background: #2c2c33;
+    border-radius: 3px;
+    overflow: hidden;
+}
+.hydrate-overlay__bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #5faeff, #3a82ff);
+    border-radius: 3px;
+    transition: width 0.2s ease-out;
+}
+/* Indeterminate state (repack has no percent): animated moving stripe. */
+.hydrate-overlay__bar--indeterminate {
+    background: linear-gradient(90deg, #2c2c33 0%, #5faeff 40%, #3a82ff 60%, #2c2c33 100%);
+    background-size: 200% 100%;
+    animation: hydrate-indeterminate 1.2s linear infinite;
+}
+@keyframes hydrate-indeterminate {
+    0%   { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
+}
+.hydrate-overlay__sub {
+    margin-top: 10px;
+    font-size: 12px;
+    color: #a0a0a8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

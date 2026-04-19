@@ -73,6 +73,19 @@
     <!-- Achievement-unlock toast stack (RA style) -->
     <div id="achievement-toasts" class="achievement-toasts" aria-live="polite"></div>
 
+    <!-- ROM hydrate progress overlay. Shown while pkg/worker/romcache
+         is extracting + repacking a .7z-archived game; hidden on
+         stage==='done'. Populated by web/js/hydrateOverlay.js. -->
+    <div id="hydrate-overlay" class="hydrate-overlay hidden" role="status" aria-live="polite">
+        <div class="hydrate-overlay__box">
+            <div id="hydrate-overlay-title" class="hydrate-overlay__title">Loading…</div>
+            <div class="hydrate-overlay__track">
+                <div id="hydrate-overlay-bar" class="hydrate-overlay__bar" style="width:0%"></div>
+            </div>
+            <div id="hydrate-overlay-sub" class="hydrate-overlay__sub"></div>
+        </div>
+    </div>
+
     <!-- User preferences panel (core options, RA credential, control overrides) -->
     <div id="user-settings-panel" class="user-settings-panel hidden" role="dialog" aria-modal="true" aria-labelledby="user-settings-title">
         <div class="user-settings-panel__header">

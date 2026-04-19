@@ -533,8 +533,27 @@ func (c *coordinator) startXemuRoom(w *Worker, r *room.Room[*room.GameSession], 
 	// unwarranted until we see a case where it matters.
 	w.log.Info().Str("game", game.Name).Str("archive", game.Path).
 		Msg("[ROMCACHE] room registered; hydrating before launch")
+	progress := func(stage string, percent int, extras string) {
+		// r.Send drops when the data channel isn't open yet. The first
+		// 1-2 s of hydration will silently drop; the 30-90 s that
+		// follow will land once WebRTC negotiation completes. Good
+		// enough for a progress UI — we don't need a buffered replay.
+		data, err := api.Wrap(api.Out{
+			T: uint8(api.RoomHydrateProgress),
+			Payload: api.RoomHydrateProgressResponse{
+				Stage:   stage,
+				Percent: percent,
+				Extras:  extras,
+			},
+		})
+		if err != nil {
+			w.log.Warn().Err(err).Msg("[ROMCACHE] progress wrap failed")
+			return
+		}
+		r.Send(data)
+	}
 	go func() {
-		resolved, err := w.hyd.Resolve(dvdPath)
+		resolved, err := w.hyd.Resolve(dvdPath, progress)
 		if err != nil {
 			w.log.Error().Err(err).Msg("[ROMCACHE] hydrate failed; closing room")
 			r.Close()

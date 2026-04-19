@@ -112,4 +112,21 @@ type (
 		Points      uint32 `json:"points"`
 		BadgeURL    string `json:"badge_url,omitempty"`
 	}
+
+	// RoomHydrateProgressResponse fires during async ROM hydration
+	// (pkg/worker/romcache) so the browser can render a loading UI
+	// while the 30–90 s extract/repack runs. Stage names:
+	//
+	//   "extract"  — 7z decompression (Percent 0-100)
+	//   "repack"   — extract-xiso building an XISO from the loose
+	//                filesystem tree (no percent; Percent stays -1)
+	//   "done"     — hydration finished, xemu about to start (100)
+	//
+	// Extras is a human-readable postfix (e.g. "Halo - Combat Evolved"
+	// or "1.2 GB extracted"), shown verbatim in the UI.
+	RoomHydrateProgressResponse struct {
+		Stage   string `json:"stage"`
+		Percent int    `json:"percent"`
+		Extras  string `json:"extras,omitempty"`
+	}
 )

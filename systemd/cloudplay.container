@@ -8,12 +8,23 @@ ContainerName=cloudplay
 Image=localhost/cloudplay-run:latest
 
 # libretro cores + NVIDIA userspace need the default container sandbox relaxed.
+# --group-add keep-groups propagates the rootless user's supplementary groups
+# into the namespace so /dev/uinput under the input group is writable for
+# the xemu backend's virtual-gamepad path (a no-op when xemu is disabled).
 SecurityLabelDisable=true
-PodmanArgs=--security-opt seccomp=unconfined
+PodmanArgs=--security-opt seccomp=unconfined --group-add keep-groups
 
 # GPU + display passthrough
 AddDevice=/dev/dri
 AddDevice=nvidia.com/gpu=all
+# /dev/uinput for the xemu backend's virtual Xbox 360 gamepad. Harmless
+# when xemu is disabled; required the moment xbox games are enabled.
+# See systemd/99-cloudplay-uinput.rules for the host-side udev setup.
+AddDevice=/dev/uinput
+# /dev/input/ event nodes need to be visible so xemu's SDL can find our
+# virtual pad (AddDevice only exposes specific nodes — we can't predict
+# which /dev/input/eventN udev will assign).
+Volume=/dev/input:/dev/input
 
 # External-facing ports
 PublishPort=0.0.0.0:8009:8000/tcp
@@ -31,6 +42,12 @@ Volume=/home/rocks/containers/cloudplay/cores:/usr/local/share/cloud-game/assets
 Volume=/home/rocks/containers/cloudplay/saves:/root/.cr/save:z
 Volume=/home/rocks/containers/cloudplay/libretro/system:/usr/local/share/cloud-game/libretro/system:z
 Volume=/home/rocks/containers/cloudplay/libretro/saves:/usr/local/share/cloud-game/libretro-save:z
+# xemu BIOS (MCPX + flash) + HDD qcow2. Must be rw because xemu writes
+# back to the qcow2 for save games, eeprom, dashboard settings. Empty
+# dir + xemu.enabled=false (config.yaml default) is fine — only the
+# xemu backend touches this path. Operators populating the dir signal
+# their intent to turn on xbox support by also flipping xemu.enabled.
+Volume=/home/rocks/containers/cloudplay/xemu-bios:/xemu-bios:z
 
 # Vulkan ICDs + NVIDIA userspace libs from host
 Volume=/usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro

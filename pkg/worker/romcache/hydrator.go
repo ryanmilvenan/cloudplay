@@ -254,6 +254,13 @@ func isArchive(path string) bool {
 	return strings.EqualFold(filepath.Ext(path), ".7z")
 }
 
+// NeedsHydration is the public equivalent of isArchive — callers use it
+// to decide whether to run the slow async path or the fast inline one.
+// Cheap: string comparison only, no I/O.
+func NeedsHydration(path string) bool {
+	return isArchive(path)
+}
+
 func fileSize(path string) (int64, error) {
 	info, err := os.Stat(path)
 	if err != nil {

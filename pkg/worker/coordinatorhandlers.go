@@ -14,6 +14,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged"
 	xemucage "github.com/giongto35/cloud-game/v3/pkg/worker/caged/xemu"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/media"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/romcache"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/room"
 	"github.com/goccy/go-json"
 )
@@ -483,16 +484,7 @@ func (c *coordinator) startXemuRoom(w *Worker, r *room.Room[*room.GameSession], 
 	if !ok {
 		return &xemuStartErr{what: "mana.Get(Xemu) returned unexpected type"}
 	}
-	// Hydrate .7z-archived ROMs in place (extract next to the source
-	// archive, remove the archive on success). For plain .iso / .xiso the
-	// hydrator is a no-op — it returns the input path unchanged.
 	dvdPath := filepath.Join(w.conf.Library.BasePath, game.Path)
-	if resolved, err := w.hyd.Resolve(dvdPath); err != nil {
-		return &xemuStartErr{what: "rom hydrate: " + err.Error()}
-	} else {
-		dvdPath = resolved
-	}
-	xcage.SetDvd(dvdPath)
 	r.SetApp(appIface)
 
 	m := media.NewWebRtcMediaPipe(w.conf.Encoder.Audio, w.conf.Encoder.Video, w.log)
@@ -517,8 +509,46 @@ func (c *coordinator) startXemuRoom(w *Worker, r *room.Room[*room.GameSession], 
 	// filter from the libretro path is unnecessary.
 	appIface.SetDataCb(r.Send)
 
-	w.log.Info().Str("game", game.Name).Str("iso", game.Path).Msg("xemu room ready")
-	r.StartApp()
+	// Fast path: nothing to extract. Start xemu inline — same flow as
+	// Phase 7 shipped.
+	if !romcache.NeedsHydration(dvdPath) {
+		xcage.SetDvd(dvdPath)
+		w.log.Info().Str("game", game.Name).Str("iso", game.Path).Msg("xemu room ready")
+		r.StartApp()
+		return nil
+	}
+
+	// Slow path: return success immediately so the coordinator's StartGame
+	// RPC doesn't time out at 10 s. Hydration (7z extract + optional
+	// extract-xiso repack) takes 30–90 s for a typical Xbox title over
+	// the NAS. While we're hydrating, the browser completes WebRTC
+	// negotiation against the room; xemu hasn't booted yet so no video
+	// frames arrive until the goroutine calls StartApp.
+	//
+	// Staleness guard: if the router has moved on to a different room
+	// (user started a different game before this one finished
+	// hydrating), we must NOT call SetDvd on the shared xemu singleton —
+	// it would clobber whatever game is actually active. Room-equality
+	// against the router is close enough; a tighter CAS is possible but
+	// unwarranted until we see a case where it matters.
+	w.log.Info().Str("game", game.Name).Str("archive", game.Path).
+		Msg("[ROMCACHE] room registered; hydrating before launch")
+	go func() {
+		resolved, err := w.hyd.Resolve(dvdPath)
+		if err != nil {
+			w.log.Error().Err(err).Msg("[ROMCACHE] hydrate failed; closing room")
+			r.Close()
+			return
+		}
+		if active := w.router.Room(); active != r {
+			w.log.Warn().Msg("[ROMCACHE] room no longer active after hydrate; abandoning launch")
+			return
+		}
+		xcage.SetDvd(resolved)
+		w.log.Info().Str("game", game.Name).Str("iso", resolved).
+			Msg("xemu room ready (post-hydration)")
+		r.StartApp()
+	}()
 	return nil
 }
 

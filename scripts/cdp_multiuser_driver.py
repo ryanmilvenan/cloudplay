@@ -134,15 +134,22 @@ def tab_status(tab):
         playing: document.querySelector('#stream')?.currentTime || 0,
         ready: document.querySelector('#stream')?.readyState || 0,
         slot: document.getElementById('playeridx')?.value,
-        selectedGame: document.querySelector('.game-list-item.selected')?.textContent?.slice(0,60),
+        selectedGame: document.querySelector('.game-select__result.is-selected')?.textContent?.slice(0,60),
     })""")
 
 
 def click_game(tab, pattern):
+    # Search-first UI: results only render once the user types. Stuff
+    # the pattern into the input, fire an 'input' event so the fuzzy
+    # filter runs synchronously, then click the first matching result.
     return tab.eval(f"""(() => {{
-        const items = Array.from(document.querySelectorAll('.game-list-item'));
-        const target = items.find(e => {json.dumps(pattern).replace('"', "'")}.split('').every(c => true) &&
-                                       new RegExp({json.dumps(pattern)}).test(e.textContent||''));
+        const input = document.getElementById('game-select-input');
+        if (!input) return 'no-input';
+        input.value = {json.dumps(pattern)};
+        input.dispatchEvent(new Event('input', {{bubbles:true}}));
+        const items = Array.from(document.querySelectorAll('.game-select__result'));
+        const re = new RegExp({json.dumps(pattern)}, 'i');
+        const target = items.find(e => re.test(e.textContent||''));
         if (!target) return 'notfound';
         target.click();
         return 'clicked ' + (target.textContent||'').slice(0,60);

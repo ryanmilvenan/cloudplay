@@ -91,142 +91,213 @@ html, body {
     text-transform: uppercase;
 }
 
-#game-list-title {
-    font-family: '6809', monospace;
-    font-size: 13px;
-    letter-spacing: 3px;
-    color: rgba(255,255,255,0.3);
-    padding: 32px 0 20px;
-    text-transform: uppercase;
-    flex-shrink: 0;
-}
+/* ── Search-first game select ──
+   The flat grid is gone. A single input drives everything: typing
+   filters the dropdown live; pressing Enter in AI mode hands the query
+   to the conversational agent (see web/js/aiSearch.js).
 
-#game-list-container {
+   Layout:
+     ┌──────────────────────────────────────────┐
+     │                                          │
+     │   [AI breath — large, top third]         │   ← absolute, top:0 h:33vh
+     │                                          │
+     ├──────────────────────────────────────────┤
+     │   [search bar] + 🤖                      │   ← at ~33vh from top
+     │   ┌──────────────────────────────────┐   │
+     │   │ fuzzy results OR ai chain         │   ← below bar, flows down,
+     │   │ (newest at top, oldest at bottom) │     each turn dims as it
+     │   └──────────────────────────────────┘   │     sinks toward the floor
+     │                                          │
+     └──────────────────────────────────────────┘
+ */
+
+#game-list-screen { position: relative; }
+
+.game-select__stage {
     width: 100%;
     max-width: 760px;
-    flex: 1;
-    overflow-y: scroll;
-    overflow-x: hidden;
-    padding: 0 16px 40px;
+    margin: 0 auto;
+    padding: 34vh 16px 40px;   /* search bar lives at 33% down from top */
     box-sizing: border-box;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255,255,255,0.1) transparent;
-    /* Ensure container fills available space and scrolls */
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
     min-height: 0;
-    -webkit-user-select: none;
-    user-select: none;
-    /* Allow touch scrolling even when touching clickable items */
-    touch-action: pan-y;
 }
 
-.game-system-card {
-    margin: 0 0 18px;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 14px;
-    background: rgba(255,255,255,0.03);
-    overflow: hidden;
-}
-
-.game-system-card__header {
+.game-select__searchwrap {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 14px 18px;
+    gap: 10px;
+    padding: 4px 6px 4px 18px;
     background: rgba(255,255,255,0.04);
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    transition: border-color 0.2s, background 0.2s;
+}
+.game-select__searchwrap:focus-within {
+    border-color: rgba(255,255,255,0.22);
+    background: rgba(255,255,255,0.06);
 }
 
-.game-system-card__title {
-    font-family: '6809', monospace;
-    font-size: 12px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: rgba(255,255,255,0.78);
+.game-select__input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #fff;
+    font-size: 17px;
+    padding: 14px 0;
+    font-family: inherit;
+}
+.game-select__input::placeholder {
+    color: rgba(255,255,255,0.25);
 }
 
-.game-system-card__count {
+.game-select__ai-toggle {
+    background: rgba(255,255,255,0.03);
+    color: rgba(255,255,255,0.3);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    width: 40px; height: 40px;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.25s;
+}
+.game-select__ai-toggle.is-on {
+    background: rgba(95,174,255,0.1);
+    color: rgba(200,222,255,0.95);
+    border-color: rgba(95,174,255,0.35);
+    box-shadow: 0 0 16px rgba(95,174,255,0.18) inset;
+}
+.game-select__ai-toggle:hover { color: rgba(255,255,255,0.9); }
+.game-select__ai-icon { display: block; }
+
+.game-select__results {
+    list-style: none;
+    max-height: 55vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: none;
+    flex-direction: column;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.1) transparent;
+    transition: opacity 0.35s;
+}
+.game-select__results.has-results { display: flex; }
+.game-select__results::-webkit-scrollbar { width: 3px; }
+.game-select__results::-webkit-scrollbar-track { background: transparent; }
+.game-select__results::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+
+.game-select__result {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.game-select__result:hover,
+.game-select__result.is-selected {
+    background: rgba(255,255,255,0.06);
+}
+.game-select__result.is-selected {
+    border-left: 3px solid rgba(95,174,255,0.6);
+    padding-left: 15px;
+}
+.game-select__result-title {
+    color: #fff;
+    font-size: 16px;
+    font-weight: 500;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+.game-select__result-system {
+    color: rgba(255,255,255,0.35);
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: rgba(255,255,255,0.35);
+    flex-shrink: 0;
 }
 
-.game-system-card__list {
+/* AI conversation chain — sits immediately below the search bar,
+   flows chronologically DOWNWARD. Newest turn is at the top (0.72
+   opacity); each successively older turn dims by ~0.2 and sinks
+   toward the viewport floor. Max 4 visible; anything older falls off.
+   JS owns the per-entry opacity; CSS just handles type and the
+   cross-fade when a new turn displaces the chain. */
+.ai-chain {
     display: flex;
     flex-direction: column;
+    gap: 4px;
+    color: rgba(255,255,255,0.6);
+    font-size: 14px;
+    padding: 0 6px;
+    min-height: 0;
 }
+.ai-chain__entry {
+    transition: opacity 0.9s ease-out;
+    line-height: 1.45;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: 0.005em;
+}
+.ai-chain__entry--user { font-style: italic; }
+.ai-chain__entry--ai   { color: rgba(200,220,255,0.75); }
 
-#game-list-container::-webkit-scrollbar {
-    width: 3px;
+/* AI breath — the voice of god speaking to you. Occupies the top
+   third of the screen, not pinned to any other element. Emerges
+   slowly from darkness (2s ease-in fade), doesn't slide or move,
+   just surfaces into existence. Fades out a little faster when the
+   next turn arrives. Large light-weight typography with a faint
+   cool halo so it feels like a thought rather than a notification. */
+.ai-breath {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 33vh;
+    margin: 0;
+    padding: 0 8%;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: rgba(255,255,255,0.92);
+    font-size: clamp(22px, 3.6vw, 46px);
+    font-weight: 200;
+    line-height: 1.35;
+    letter-spacing: 0.012em;
+    text-shadow: 0 0 22px rgba(180,200,255,0.12);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 2s cubic-bezier(0.4, 0, 0.3, 1);
 }
-#game-list-container::-webkit-scrollbar-track {
-    background: transparent;
-}
-#game-list-container::-webkit-scrollbar-thumb {
-    background: rgba(255,255,255,0.15);
-    border-radius: 2px;
-}
+.ai-breath.is-visible { opacity: 1; }
 
-.game-list-item {
-    padding: 18px 20px;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
-    cursor: pointer;
-    transition: background 0.1s;
-    -webkit-tap-highlight-color: transparent;
-}
-
-.game-system-card__list .game-list-item:last-child {
-    border-bottom: none;
-}
-
-.game-list-item:active,
-.game-list-item:hover {
-    background: rgba(255,255,255,0.05);
-}
-
-.game-list-item.selected {
-    background: rgba(255,255,255,0.08);
-    border-left: 3px solid rgba(255,255,255,0.4);
-    padding-left: 17px;
-}
-
-.game-list-item__title {
-    font-size: 18px;
-    font-weight: 500;
-    color: #fff;
-    line-height: 1.3;
-}
-
-.game-list-item.selected .game-list-item__title {
-    color: #fff;
-}
-
-.game-list-item__system {
-    font-size: 12px;
-    color: rgba(255,255,255,0.35);
-    margin-top: 4px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
+/* When the breath is on-screen, dim the fuzzy list so the AI moment
+   has visual primacy without losing the sense that the library is
+   still under our feet. */
+.game-select__stage:has(.ai-breath.is-visible) .game-select__results {
+    opacity: 0.18;
 }
 
 @media (max-width: 640px) {
-    #game-list-container {
-        padding: 0 10px 28px;
-    }
-
-    .game-system-card__header {
-        padding: 12px 14px;
-    }
-
-    .game-list-item {
-        padding: 16px 16px;
-    }
-
-    .game-list-item.selected {
-        padding-left: 13px;
-    }
+    .game-select__stage { padding: 22px 10px 28px; gap: 14px; }
+    .game-select__input { font-size: 15px; padding: 12px 0; }
+    .game-select__result { padding: 10px 14px; }
+    .game-select__result.is-selected { padding-left: 11px; }
+    .ai-breath { font-size: 16px; }
 }
 
 /* ── Toast notifications ── */

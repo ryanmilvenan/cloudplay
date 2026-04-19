@@ -132,7 +132,21 @@ export const keyboard = {
         keyMap = settings.loadOr(opts.INPUT_KEYBOARD_MAP, defaultMap);
         const body = document.body;
 
+        // isFormInput — when the user is typing in a text field
+        // (search bar, RA credentials, etc.), keypresses should NOT be
+        // interpreted as gamepad-button presses. Without this guard,
+        // typing the letter 'a' in the new search bar fires onKey('a')
+        // → KEY_RELEASED → lifecycle.menu.keyRelease → KEY.A → startGame.
+        const isFormInput = (e) => {
+            const t = e.target;
+            if (!t) return false;
+            const tag = t.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+            return t.isContentEditable === true;
+        };
+
         body.addEventListener('keyup', e => {
+            if (isFormInput(e)) return;
             e.stopPropagation()
             !hasKeyboardLock && locked && e.preventDefault()
 
@@ -148,6 +162,7 @@ export const keyboard = {
         }, false)
 
         body.addEventListener('keydown', e => {
+            if (isFormInput(e)) return;
             e.stopPropagation()
             !hasKeyboardLock && locked && e.preventDefault()
 

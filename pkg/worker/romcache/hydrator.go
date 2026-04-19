@@ -1,32 +1,40 @@
-// Package romcache rehydrates compressed ROM archives in place: when a
-// .7z-backed game is launched, extract it alongside its source archive
-// on the NAS and remove the original .7z. Subsequent launches (and the
-// next library scan) see a regular ISO.
+// Package romcache rehydrates compressed ROM archives in place next
+// to their source archives on the NAS. Two archive shapes are handled:
+//
+//   - **Disc-image-packed**: the archive contains a single .iso / .xiso
+//     file (maybe nested a folder deep). We just extract it.
+//   - **Filesystem-packed**: the archive contains the *extracted* Xbox
+//     file tree (`<Title>/default.xbe`, `<Title>/maps/*.map`, …).
+//     xemu can't boot from loose files — we repack into an XISO via
+//     `extract-xiso -c <dir> <out.xiso>`.
+//
+// After a successful hydration the source archive is removed so the
+// next library scan sees a plain ISO (or XISO) and the 7z no longer
+// lingers alongside.
 //
 // Flow (Resolve):
 //
 //  1. Path that isn't a supported archive → return as-is.
-//  2. Path IS an archive → acquire a per-archive lock.
-//  3. If the extracted file already exists next to the archive, return it.
-//  4. Otherwise run `7z x` into a sibling temp dir, atomic-rename the
-//     payload to its final name, delete the source archive.
+//  2. Path IS an archive → per-archive mutex, re-check post-lock.
+//  3. If the archive is already gone (concurrent extract finished),
+//     scan its directory for a matching extracted payload.
+//  4. Otherwise, 7z x into a sibling .extract-XXXX temp dir.
+//  5. Classify the extracted tree:
+//       - Has a top-level .iso / .xiso file → move it next to the archive.
+//       - Has default.xbe (anywhere in the tree) → extract-xiso -c
+//         the containing dir into a <title>.xiso next to the archive.
+//       - Otherwise, error.
+//  6. Atomic-rename / extract-xiso finalize.
+//  7. os.Remove the source archive.
 //
-// Design choices:
-//
-//   - Cache lives in the same dir as the archive (on the NAS) so storage
-//     is cheap and we don't keep two copies (original + extracted).
-//     Archive removal is the confirmation that extraction succeeded.
-//   - No LRU or eviction — the NAS has room for every extracted ROM
-//     forever. If space becomes tight, operators re-archive manually.
-//   - The temp dir is on the same filesystem so the rename is atomic;
-//     a crash mid-extract leaves the original .7z untouched.
-//   - If an archive contains multiple files (bin+cue, etc.) we pick the
-//     largest, which is right for ISOs. Cue/gdi-awareness is future work.
+// The temp dir is on the same NFS mount so rename is atomic; an
+// interrupted extract leaves the source archive untouched.
 package romcache
 
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,11 +66,10 @@ func (h *Hydrator) Resolve(path string) (string, error) {
 	defer mu.Unlock()
 
 	// Race-safety: another goroutine may have just finished extracting
-	// while we were blocked on the lock. Re-check the archive state.
+	// while we were blocked on the lock. If the archive is gone but a
+	// plausible payload sits next to it, reuse that.
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// Archive gone → extraction already succeeded elsewhere. Find
-		// the payload by stripping .7z and seeing what's there.
-		if out := strings.TrimSuffix(path, filepath.Ext(path)); fileExists(out) {
+		if out, found := findLikelyPayload(filepath.Dir(path), payloadBaseName(path)); found {
 			return out, nil
 		}
 		return "", fmt.Errorf("romcache: archive %s missing and no extracted payload found", path)
@@ -73,18 +80,14 @@ func (h *Hydrator) Resolve(path string) (string, error) {
 		return "", err
 	}
 	if err := os.Remove(path); err != nil {
-		// Removal failure is annoying but not fatal — the extracted file
-		// is usable. Log and continue; operator can clean the stale
-		// archive later.
 		h.Log.Warn().Err(err).Str("archive", path).
 			Msg("[ROMCACHE] extract succeeded but source archive removal failed")
 	}
 	return extracted, nil
 }
 
-// extract runs 7z against src, puts the payload next to src, and returns
-// the final payload path. Uses a dot-prefixed sibling dir for scratch so
-// an interrupted extract leaves no partial files in the library.
+// extract runs 7z against src, classifies the result (disc-image vs
+// filesystem-packed), and produces a bootable path alongside src.
 func (h *Hydrator) extract(src string) (string, error) {
 	parent := filepath.Dir(src)
 	tmp, err := os.MkdirTemp(parent, ".extract-")
@@ -103,53 +106,142 @@ func (h *Hydrator) extract(src string) (string, error) {
 		return "", fmt.Errorf("romcache: 7z x: %w (output: %s)", err, strings.TrimSpace(string(out)))
 	}
 
-	entries, err := os.ReadDir(tmp)
-	if err != nil {
-		return "", fmt.Errorf("romcache: read tmp: %w", err)
-	}
-	picked, pickedSize, err := pickPayload(tmp, entries)
+	iso, isoFound, xbeDir, xbeFound, err := classify(tmp)
 	if err != nil {
 		return "", err
 	}
-	// Final name = same dir as the archive, preserving the extracted
-	// file's own name — 7z archives usually contain one file named
-	// sensibly (e.g. "Halo.iso"), which we'd rather keep than guess by
-	// stripping the archive suffix. The archive itself gets removed
-	// afterwards so there's no collision with the library.
-	final := filepath.Join(parent, filepath.Base(picked))
-	if err := os.Rename(picked, final); err != nil {
-		if cpErr := copyFile(picked, final); cpErr != nil {
-			return "", fmt.Errorf("romcache: finalize %s: rename=%v, copy=%v", final, err, cpErr)
+
+	final := filepath.Join(parent, payloadBaseName(src)+".xiso")
+	switch {
+	case isoFound:
+		// Disc-image-packed: rename the extracted iso next to the archive.
+		// Use the .xiso extension so xemu's mime-sniff treats it as an
+		// Xbox disc. (xemu accepts .iso too, but .xiso is the idiomatic
+		// name when the content is xiso-format.)
+		final = filepath.Join(parent, filepath.Base(iso))
+		if err := os.Rename(iso, final); err != nil {
+			if cpErr := copyFile(iso, final); cpErr != nil {
+				return "", fmt.Errorf("romcache: finalize %s: rename=%v, copy=%v", final, err, cpErr)
+			}
 		}
+		size, _ := fileSize(final)
+		h.Log.Info().Str("final", final).Int64("bytes", size).
+			Dur("elapsed", time.Since(start)).
+			Str("shape", "disc-image").
+			Msg("[ROMCACHE] extract done")
+		return final, nil
+
+	case xbeFound:
+		// Filesystem-packed: invoke extract-xiso to repack the tree into
+		// a single xiso file next to the archive.
+		if err := runExtractXiso(xbeDir, final); err != nil {
+			return "", fmt.Errorf("romcache: repack xiso: %w", err)
+		}
+		size, _ := fileSize(final)
+		h.Log.Info().Str("final", final).Int64("bytes", size).
+			Dur("elapsed", time.Since(start)).
+			Str("shape", "filesystem").
+			Msg("[ROMCACHE] extract done")
+		return final, nil
+
+	default:
+		return "", fmt.Errorf("romcache: archive contains neither an .iso/.xiso nor a default.xbe (%s)", src)
 	}
-	h.Log.Info().
-		Str("final", final).
-		Int64("bytes", pickedSize).
-		Dur("elapsed", time.Since(start)).
-		Msg("[ROMCACHE] extract done")
-	return final, nil
 }
 
-func pickPayload(dir string, entries []os.DirEntry) (string, int64, error) {
-	var best string
-	var bestSize int64
+// classify walks the extracted directory and decides which shape we
+// got. Returns (isoPath, true, "", false) for disc-image shape or
+// ("", false, xbeDir, true) for filesystem shape. If neither matches
+// both bools are false.
+//
+// When both shapes are present (weird: an archive with both an ISO
+// *and* a filesystem extraction), prefer the ISO — it's the thing the
+// emulator can boot with less work.
+func classify(root string) (isoPath string, isoFound bool, xbeDir string, xbeFound bool, err error) {
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := strings.ToLower(d.Name())
+		switch {
+		case strings.HasSuffix(name, ".iso") || strings.HasSuffix(name, ".xiso"):
+			isoPath = path
+			isoFound = true
+		case name == "default.xbe":
+			// default.xbe lives at the root of the Xbox game's filesystem.
+			// Its parent directory is what extract-xiso -c will repack.
+			xbeDir = filepath.Dir(path)
+			xbeFound = true
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return "", false, "", false, fmt.Errorf("romcache: walk extracted tree: %w", walkErr)
+	}
+	return isoPath, isoFound, xbeDir, xbeFound, nil
+}
+
+// runExtractXiso packs the given filesystem directory into an xiso
+// image using the `extract-xiso` CLI. Writes to a neighbour temp path
+// and atomic-renames to final so a crash doesn't leave a half-built
+// xiso in the library.
+func runExtractXiso(srcDir, finalPath string) error {
+	// extract-xiso -c writes to <basename>.iso in the current directory.
+	// We run it inside the srcDir's parent with a known output name.
+	workParent := filepath.Dir(srcDir)
+	cmd := exec.Command("extract-xiso", "-c", filepath.Base(srcDir))
+	cmd.Dir = workParent
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("extract-xiso -c: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	// extract-xiso names its output "<srcDirName>.iso" next to srcDir.
+	produced := filepath.Join(workParent, filepath.Base(srcDir)+".iso")
+	if _, err := os.Stat(produced); err != nil {
+		return fmt.Errorf("extract-xiso output not found at %s: %w", produced, err)
+	}
+	if err := os.Rename(produced, finalPath); err != nil {
+		if cpErr := copyFile(produced, finalPath); cpErr != nil {
+			return fmt.Errorf("finalize xiso %s: rename=%v, copy=%v", finalPath, err, cpErr)
+		}
+		_ = os.Remove(produced)
+	}
+	return nil
+}
+
+// findLikelyPayload handles the post-race case where the archive is
+// already gone. Scans for a file whose base name matches what we would
+// have produced. Returns ("", false) if nothing obvious is there.
+//
+// Matches: <stem>.iso, <stem>.xiso. Case-insensitive.
+func findLikelyPayload(dir, stem string) (string, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+	stemLower := strings.ToLower(stem)
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil {
+		name := e.Name()
+		lower := strings.ToLower(name)
+		if !strings.HasPrefix(lower, stemLower) {
 			continue
 		}
-		if info.Size() > bestSize {
-			best = filepath.Join(dir, e.Name())
-			bestSize = info.Size()
+		if strings.HasSuffix(lower, ".iso") || strings.HasSuffix(lower, ".xiso") {
+			return filepath.Join(dir, name), true
 		}
 	}
-	if best == "" {
-		return "", 0, fmt.Errorf("romcache: archive extracted no files")
-	}
-	return best, bestSize, nil
+	return "", false
+}
+
+// payloadBaseName strips the archive suffix to give the base name we
+// use for derived filenames. `Halo.xiso.7z` → `Halo.xiso`.
+func payloadBaseName(archive string) string {
+	return strings.TrimSuffix(filepath.Base(archive), filepath.Ext(archive))
 }
 
 func (h *Hydrator) lockFor(key string) *sync.Mutex {
@@ -162,9 +254,12 @@ func isArchive(path string) bool {
 	return strings.EqualFold(filepath.Ext(path), ".7z")
 }
 
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+func fileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }
 
 // copyFile is the fallback for cross-filesystem finalize.
@@ -179,6 +274,9 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return nil
 }
+

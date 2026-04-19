@@ -151,14 +151,17 @@ func (c *Caged) startProcess() error {
 		return fmt.Errorf("xvfb: %w", err)
 	}
 
-	// Videocap must bind its Unix socket BEFORE xemu launches so the
-	// LD_PRELOAD shim sees it at the first glXSwapBuffers. The callback
-	// forwards real frames straight to the same video callback the stub
-	// loop uses; liveFramesRecv gates the stub off as soon as we have
-	// data, so downstream never sees two streams simultaneously.
-	c.vcap = &Videocap{Log: c.log}
-	if err := c.vcap.Start(c.onRealVideoFrame); err != nil {
-		return fmt.Errorf("videocap: %w", err)
+	// Videocap is an ffmpeg x11grab pipe that reads the Xvfb display xemu
+	// paints to. Startup order: Xvfb (above) → xemu → videocap. ffmpeg
+	// needs xemu to be actively drawing before its probesize phase
+	// completes, otherwise ffmpeg errors out; starting Videocap AFTER xemu
+	// avoids that race. liveFramesRecv still gates the stub emitter so
+	// downstream only ever sees one stream.
+	c.vcap = &Videocap{
+		Log:     c.log,
+		Display: display,
+		Width:   c.w,
+		Height:  c.h,
 	}
 
 	// Optional Phase-4 audio capture. Launched BEFORE xemu so the
@@ -180,8 +183,6 @@ func (c *Caged) startProcess() error {
 	c.proc = &Process{
 		Conf:            c.conf.Xemu,
 		Display:         display,
-		VideocapSock:    c.vcap.SocketPath(),
-		PreloadPath:     c.conf.Xemu.VideoPreloadPath,
 		PulseServer:     pulseSrv,
 		PulseRuntimeDir: pulseRun,
 		Log:             c.log,
@@ -193,6 +194,14 @@ func (c *Caged) startProcess() error {
 	}
 	if err := c.proc.Start(); err != nil {
 		return fmt.Errorf("process: %w", err)
+	}
+
+	// Give xemu a beat to open its window and start rendering — ffmpeg
+	// x11grab's initial probesize pass needs a live frame to lock on,
+	// otherwise it errors out with "cannot open display" races.
+	time.Sleep(500 * time.Millisecond)
+	if err := c.vcap.Start(c.onRealVideoFrame); err != nil {
+		return fmt.Errorf("videocap: %w", err)
 	}
 
 	if c.pwse != nil {

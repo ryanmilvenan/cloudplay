@@ -3,6 +3,7 @@
 !pkg/
 !scripts/
 !web/
+!vendor/
 !go.mod
 !go.sum
 !LICENSE

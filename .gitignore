@@ -90,3 +90,7 @@ games/
 /saves/
 /libretro/
 /dolphin/
+
+# xemu AppImage extraction — staged by scripts/extract-xemu.sh for
+# Dockerfile.run to COPY in. Regenerable; don't commit the ~100MB blob.
+vendor/xemu/

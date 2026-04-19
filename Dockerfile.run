@@ -18,17 +18,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     file \
   && rm -rf /var/lib/apt/lists/*
 
-# xemu AppImage (extracted, no FUSE). Matches the dev container so an
-# upgrade only has to change the ARG XEMU_VERSION. xemu is OFF by default
-# (xemu.enabled=false in config.yaml); binaries just sit here until an
-# operator toggles the config + drops BIOS files into the bind-mount.
-RUN wget -q "https://github.com/xemu-project/xemu/releases/download/${XEMU_VERSION}/xemu-${XEMU_VERSION}-x86_64.AppImage" \
-      -O /tmp/xemu.AppImage && \
-    chmod +x /tmp/xemu.AppImage && \
-    cd /opt && /tmp/xemu.AppImage --appimage-extract && \
-    mv squashfs-root xemu && \
-    ln -s /opt/xemu/AppRun /usr/local/bin/xemu && \
-    rm /tmp/xemu.AppImage
+# xemu AppImage. podman build's default sandbox blocks the AppImage
+# self-extractor (exit status 5 on the squashfs mount syscalls even with
+# seccomp=unconfined), so we download + extract in a fresh runtime
+# container and COPY the result in. The runner-invocation surface where
+# extraction works is `podman run --rm --privileged ubuntu bash -c "..."`
+# which scripts/extract-xemu.sh automates. The script leaves extracted
+# files in vendor/xemu/ which this COPY pulls into the image.
+#
+# Upgrading xemu: bump ARG XEMU_VERSION + rerun scripts/extract-xemu.sh,
+# then /deploy-cloudplay.
+COPY vendor/xemu /opt/xemu
+RUN ln -s /opt/xemu/AppRun /usr/local/bin/xemu
 
 COPY xorg-dummy.conf /etc/X11/xorg.conf
 

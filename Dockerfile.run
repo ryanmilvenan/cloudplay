@@ -17,7 +17,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     p7zip-full \
     wget \
     file \
+    build-essential \
+    cmake \
+    ca-certificates \
+    git \
   && rm -rf /var/lib/apt/lists/*
+
+# extract-xiso: tiny C tool that pack/unpacks Xbox ISO (XISO) images.
+# pkg/worker/romcache/hydrator.go shells out to `extract-xiso -c <dir>`
+# when an archived ROM turns out to be a filesystem-packed dump (loose
+# default.xbe + maps/) rather than a pre-built disc image. No Debian
+# package exists; building from source takes ~5 s and keeps the image
+# self-contained. Upstream uses CMake.
+RUN git clone --depth=1 https://github.com/XboxDev/extract-xiso.git /tmp/extract-xiso \
+ && cmake -S /tmp/extract-xiso -B /tmp/extract-xiso/build -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build /tmp/extract-xiso/build -j"$(nproc)" \
+ && install -m 0755 /tmp/extract-xiso/build/extract-xiso /usr/local/bin/extract-xiso \
+ && rm -rf /tmp/extract-xiso
 
 # xemu AppImage. podman build's default sandbox blocks the AppImage
 # self-extractor (exit status 5 on the squashfs mount syscalls even with

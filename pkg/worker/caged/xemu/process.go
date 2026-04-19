@@ -204,9 +204,14 @@ func (p *Process) writeConfig(flash, boot, hdd, dvd string) error {
 	if dvd != "" {
 		dvdLine = fmt.Sprintf("dvd_path = %q\n", dvd)
 	}
+	// fullscreen_on_startup hides xemu's "Machine/View/Debug/Help" ImGui
+	// menu bar so our x11grab capture sees only the emulated framebuffer
+	// instead of bleeding 19px of GUI chrome into every frame. For a
+	// headless cloudplay cage the menu is never useful anyway.
 	body := fmt.Sprintf(`[general]
 show_welcome = false
 screenshot_dir = ""
+fullscreen_on_startup = true
 
 [general.updates]
 check = false

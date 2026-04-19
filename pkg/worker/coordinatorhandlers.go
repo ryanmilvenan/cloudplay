@@ -495,9 +495,13 @@ func (c *coordinator) startXemuRoom(w *Worker, r *room.Room[*room.GameSession], 
 	if err := m.Init(); err != nil {
 		return err
 	}
-	// xemu's x11grab frames are already top-down; no flip needed. PixFmt
-	// and rotation are libretro-isms — the defaults in the encoder path
-	// work for RGBA.
+	// ffmpeg x11grab -pix_fmt rgba hands us memory order R,G,B,A, which
+	// libyuv calls FOURCC_ABGR (little-endian-register view is 0xABGR,
+	// memory bytes are RGBA). The encoder's SetPixFormat routes 4+ to
+	// the Abgr path. 0/1/2 are libretro-specific (Rgb0, Argb, RGB565);
+	// passing 4 explicitly matches our ffmpeg output byte order.
+	// x11grab frames are already top-down; no vertical flip needed.
+	m.SetPixFmt(4)
 	r.BindAppMedia()
 	// Broadcast-to-all data-channel sender is fine for xemu: the backend
 	// doesn't emit per-port rumble packets today, so the targeted rumble

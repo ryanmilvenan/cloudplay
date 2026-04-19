@@ -9,10 +9,12 @@ Image=localhost/cloudplay-run:latest
 
 # libretro cores + NVIDIA userspace need the default container sandbox relaxed.
 # --group-add keep-groups propagates the rootless user's supplementary groups
-# into the namespace so /dev/uinput under the input group is writable for
-# the xemu backend's virtual-gamepad path (a no-op when xemu is disabled).
+# into the namespace; --group-add 104 explicitly joins the host's `input`
+# group so the container can open kernel-owned /dev/input/event* nodes
+# created via the xemu backend's uinput virtual pads. (/etc/subgid on moon
+# includes `rocks:104:1` so this GID is mappable.)
 SecurityLabelDisable=true
-PodmanArgs=--security-opt seccomp=unconfined --group-add keep-groups
+PodmanArgs=--security-opt seccomp=unconfined --group-add 104
 
 # GPU + display passthrough
 AddDevice=/dev/dri
@@ -35,7 +37,11 @@ Volume=/home/rocks/containers/cloudplay/config/config.yaml:/usr/local/share/clou
 Volume=/home/rocks/containers/cloudplay/web:/usr/local/share/cloud-game/web:ro,z
 
 # Game library
-Volume=/home/rocks/containers/cloudplay/games:/usr/local/share/cloud-game/assets/games:ro,z
+# Game library. Writable because pkg/worker/romcache extracts .7z
+# archives in place on first play and removes the original archive once
+# the extracted file is durable. A ro mount would make the hydrator
+# fail on any archived ROM.
+Volume=/var/mnt/data/media/games:/usr/local/share/cloud-game/assets/games:rw
 Volume=/home/rocks/containers/cloudplay/cores:/usr/local/share/cloud-game/assets/cores:ro,z
 
 # Runtime state (read-write)

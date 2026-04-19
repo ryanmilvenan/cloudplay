@@ -208,6 +208,12 @@ func (p *Process) writeConfig(flash, boot, hdd, dvd string) error {
 	// menu bar so our x11grab capture sees only the emulated framebuffer
 	// instead of bleeding 19px of GUI chrome into every frame. For a
 	// headless cloudplay cage the menu is never useful anyway.
+	// Pin all four Xbox ports to the stable SDL joystick GUID our uinput
+	// pads advertise: bustype=USB (0003), vid 0x045E, pid 0x028E (see
+	// input.go), SDL's standard driver signature. caged.go opens four
+	// identical pads at session start; SDL sees four instances of the
+	// canonical "Microsoft X-Box 360 pad" and xemu assigns them to
+	// port1..port4 in enumeration order.
 	body := fmt.Sprintf(`[general]
 show_welcome = false
 screenshot_dir = ""
@@ -224,6 +230,15 @@ bootrom_path = %q
 flashrom_path = %q
 hdd_path = %q
 %seeprom_path = ""
+
+[input]
+auto_bind = true
+
+[input.bindings]
+port1 = "030000005e0400008e02000010010000"
+port2 = "030000005e0400008e02000010010000"
+port3 = "030000005e0400008e02000010010000"
+port4 = "030000005e0400008e02000010010000"
 `, boot, flash, hdd, dvdLine)
 	return os.WriteFile(p.tomlPath, []byte(body), 0o644)
 }

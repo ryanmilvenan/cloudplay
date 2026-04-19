@@ -14,7 +14,11 @@
 
 KERNEL=="uinput", MODE="0660", GROUP="input", TAG+="uaccess"
 
-# Event nodes created by our virtual pads need matching group access so the
-# rootless container can read them back (e.g. evtest in the canary harness).
-SUBSYSTEM=="input", ATTRS{name}=="Microsoft X-Box 360 pad", MODE="0660", GROUP="input", TAG+="uaccess"
-SUBSYSTEM=="input", ATTRS{name}=="cloudplay-canary-pad",    MODE="0660", GROUP="input", TAG+="uaccess"
+# Event nodes created by our virtual pads must be world-accessible so the
+# rootless podman container (which does not share the host's input-group GID
+# mapping) can open them via its xemu SDL joystick scan. Scope is narrowed to
+# nodes whose parent carries exactly our virtual pad's name/vid/pid — a real
+# physical 360 pad on the host does NOT match because its parent attrs include
+# a non-empty phys/uniq chain the virtual device lacks.
+SUBSYSTEM=="input", ATTRS{name}=="Microsoft X-Box 360 pad", ATTRS{id/vendor}=="045e", ATTRS{id/product}=="028e", ATTRS{phys}=="", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="input", ATTRS{name}=="cloudplay-canary-pad",    MODE="0666", TAG+="uaccess"

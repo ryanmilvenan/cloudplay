@@ -210,6 +210,10 @@ emulator:
           roms:
           - iso
           - xiso
+          # .7z entries are hydrated in place on first play by
+          # pkg/worker/romcache — extract alongside the archive, delete the
+          # archive, next library scan sees a normal iso.
+          - 7z
           backend: xemu
         pcsx:
           lib: pcsx_rearmed_libretro

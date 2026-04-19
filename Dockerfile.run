@@ -1,10 +1,34 @@
 FROM localhost/cloudplay:latest
 
+ARG XEMU_VERSION=v0.8.5
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     xserver-xorg-core \
     xserver-xorg-video-dummy \
+    x11-utils \
+    pipewire \
+    pipewire-pulse \
+    pipewire-audio \
+    wireplumber \
+    pipewire-bin \
+    pulseaudio-utils \
+    evtest \
+    wget \
+    file \
   && rm -rf /var/lib/apt/lists/*
+
+# xemu AppImage (extracted, no FUSE). Matches the dev container so an
+# upgrade only has to change the ARG XEMU_VERSION. xemu is OFF by default
+# (xemu.enabled=false in config.yaml); binaries just sit here until an
+# operator toggles the config + drops BIOS files into the bind-mount.
+RUN wget -q "https://github.com/xemu-project/xemu/releases/download/${XEMU_VERSION}/xemu-${XEMU_VERSION}-x86_64.AppImage" \
+      -O /tmp/xemu.AppImage && \
+    chmod +x /tmp/xemu.AppImage && \
+    cd /opt && /tmp/xemu.AppImage --appimage-extract && \
+    mv squashfs-root xemu && \
+    ln -s /opt/xemu/AppRun /usr/local/bin/xemu && \
+    rm /tmp/xemu.AppImage
 
 COPY xorg-dummy.conf /etc/X11/xorg.conf
 

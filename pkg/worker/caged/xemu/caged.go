@@ -42,7 +42,7 @@ type Caged struct {
 	vcap *Videocap
 	pwse *PipeWireSession
 	acap *Audiocap
-	pad  *VirtualPad
+	pads [xboxPorts]*VirtualPad
 
 	// liveFramesRecv is non-zero once the real capture path has delivered
 	// at least one frame; the stub loop then pauses its emissions so the
@@ -57,6 +57,11 @@ const (
 	defaultWidth  = 640
 	defaultHeight = 480
 	targetFPS     = 60
+	// xboxPorts is the hardware cap: the Xbox's physical USB expander has
+	// exactly four controller ports. We create one uinput-backed virtual pad
+	// per port at session start and bind them 1:1 to xemu's [input.bindings]
+	// entries so joiners map cleanly onto player 2-4.
+	xboxPorts = 4
 )
 
 func Cage(conf CagedConf, log *logger.Logger) Caged {
@@ -113,12 +118,14 @@ func (c *Caged) SetDataCb(cb func([]byte))               { c.dataCb.Store(&cb) }
 func (c *Caged) EmitData(_ []byte) {}
 
 func (c *Caged) Input(port int, _ byte, data []byte) {
-	if c.pad == nil {
+	if port < 0 || port >= xboxPorts {
 		return
 	}
-	// TODO Phase 5+: route by port when we add multi-pad support. For now
-	// the single pad swallows all ports; revisit when joiner sessions ship.
-	if err := c.pad.Inject(data); err != nil {
+	pad := c.pads[port]
+	if pad == nil {
+		return
+	}
+	if err := pad.Inject(data); err != nil {
 		c.log.Warn().Err(err).Int("port", port).Msg("[XEMU-INPUT] inject failed")
 	}
 }
@@ -189,6 +196,27 @@ func (c *Caged) startProcess() error {
 		}
 	}
 
+	// Virtual pads must exist BEFORE xemu launches so xemu's SDL enumerates
+	// them at initialization time. Linux SDL2 hotplug is unreliable without
+	// a running udevd (the container has none), so starting them post-launch
+	// lands them after xemu's one-shot SDL_Init joystick scan — xemu sees
+	// zero controllers and binds nothing to the Xbox USB ports.
+	if c.conf.Xemu.InputInject {
+		for port := 0; port < xboxPorts; port++ {
+			pad := &VirtualPad{
+				Log:        c.log,
+				DeviceName: "Microsoft X-Box 360 pad",
+				Port:       port,
+			}
+			if err := pad.Open(); err != nil {
+				c.log.Warn().Err(err).Int("port", port).
+					Msg("[XEMU-CAGE] virtual pad open failed; skipping port")
+				continue
+			}
+			c.pads[port] = pad
+		}
+	}
+
 	c.proc = &Process{
 		Conf:            c.conf.Xemu,
 		Display:         display,
@@ -223,18 +251,6 @@ func (c *Caged) startProcess() error {
 		if err := c.acap.Start(c.onRealAudioFrame); err != nil {
 			c.log.Warn().Err(err).Msg("[XEMU-CAGE] audiocap start failed; continuing without audio")
 			c.acap = nil
-		}
-	}
-
-	if c.conf.Xemu.InputInject {
-		c.pad = &VirtualPad{
-			Log:        c.log,
-			DeviceName: "Microsoft X-Box 360 pad",
-			Port:       0,
-		}
-		if err := c.pad.Open(); err != nil {
-			c.log.Warn().Err(err).Msg("[XEMU-CAGE] virtual pad open failed; continuing without input")
-			c.pad = nil
 		}
 	}
 
@@ -280,9 +296,11 @@ func (c *Caged) teardownProcess() {
 		_ = c.proc.Close()
 		c.proc = nil
 	}
-	if c.pad != nil {
-		_ = c.pad.Close()
-		c.pad = nil
+	for i, pad := range c.pads {
+		if pad != nil {
+			_ = pad.Close()
+			c.pads[i] = nil
+		}
 	}
 	if c.vcap != nil {
 		_ = c.vcap.Close()

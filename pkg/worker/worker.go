@@ -15,6 +15,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/libretro"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/cloud"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/rcheevos"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/romcache"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/room"
 )
 
@@ -38,6 +39,12 @@ type Worker struct {
 	// process; a failure here is non-fatal — the worker just won't
 	// track achievements until the problem is resolved.
 	rch *rcheevos.Client
+
+	// hyd extracts .7z-archived ROMs on first play and removes the
+	// source archive afterwards so the library sees a normal ISO. Shared
+	// across sessions so concurrent launches of the same archive
+	// serialize correctly.
+	hyd *romcache.Hydrator
 }
 
 func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
@@ -64,6 +71,7 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 		log:      log,
 		mana:     manager,
 		router:   room.NewGameRouter(),
+		hyd:      &romcache.Hydrator{Log: log},
 	}
 
 	h, err := httpx.NewServer(

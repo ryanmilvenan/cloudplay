@@ -483,7 +483,16 @@ func (c *coordinator) startXemuRoom(w *Worker, r *room.Room[*room.GameSession], 
 	if !ok {
 		return &xemuStartErr{what: "mana.Get(Xemu) returned unexpected type"}
 	}
-	xcage.SetDvd(filepath.Join(w.conf.Library.BasePath, game.Path))
+	// Hydrate .7z-archived ROMs in place (extract next to the source
+	// archive, remove the archive on success). For plain .iso / .xiso the
+	// hydrator is a no-op — it returns the input path unchanged.
+	dvdPath := filepath.Join(w.conf.Library.BasePath, game.Path)
+	if resolved, err := w.hyd.Resolve(dvdPath); err != nil {
+		return &xemuStartErr{what: "rom hydrate: " + err.Error()}
+	} else {
+		dvdPath = resolved
+	}
+	xcage.SetDvd(dvdPath)
 	r.SetApp(appIface)
 
 	m := media.NewWebRtcMediaPipe(w.conf.Encoder.Audio, w.conf.Encoder.Video, w.log)

@@ -97,6 +97,11 @@ const (
 	// AchievementUnlocked: worker→client broadcast, fires when
 	// rc_client reports an unlock for the host's RA account.
 	AchievementUnlocked PT = 208
+	// RoomHydrateProgress: worker→client broadcast, fires periodically
+	// during async ROM hydration (pkg/worker/romcache) so the browser
+	// can show an overlay while a .7z archive extracts + repacks into
+	// a bootable XISO. Payload: RoomHydrateProgressResponse.
+	RoomHydrateProgress PT = 209
 )
 
 func (p PT) String() string {
@@ -147,6 +152,10 @@ func (p PT) String() string {
 		return "PrevSessions"
 	case RoomMembers:
 		return "RoomMembers"
+	case AchievementUnlocked:
+		return "AchievementUnlocked"
+	case RoomHydrateProgress:
+		return "RoomHydrateProgress"
 	default:
 		return "Unknown"
 	}

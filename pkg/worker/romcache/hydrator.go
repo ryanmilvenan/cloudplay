@@ -38,12 +38,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 )
+
+// ProgressFunc is the worker-facing hook for hydration progress. Called
+// from arbitrary goroutines (7z stdout reader, the stage transitions).
+// Passing nil disables progress entirely — all reporting is optional.
+//
+//   stage   — one of "extract" | "repack" | "done" | "start"
+//   percent — 0-100 when known, -1 when the stage has no granular progress
+//   extras  — short human-readable hint ("Halo - Combat Evolved",
+//             "1.2 GB", etc.). Free-form.
+type ProgressFunc func(stage string, percent int, extras string)
 
 // Hydrator turns archive paths into extracted paths. Thread-safe; safe
 // to share a single instance across the worker.
@@ -56,8 +67,10 @@ type Hydrator struct {
 
 // Resolve returns a filesystem path the emulator can read directly. For
 // supported archives it extracts, removes the original, and returns the
-// extracted path. For anything else it returns path unchanged.
-func (h *Hydrator) Resolve(path string) (string, error) {
+// extracted path. For anything else it returns path unchanged. Passing
+// a nil progress func disables progress reporting; callers who only
+// care about the result can use ResolveNoProgress.
+func (h *Hydrator) Resolve(path string, progress ProgressFunc) (string, error) {
 	if !isArchive(path) {
 		return path, nil
 	}
@@ -70,12 +83,14 @@ func (h *Hydrator) Resolve(path string) (string, error) {
 	// plausible payload sits next to it, reuse that.
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if out, found := findLikelyPayload(filepath.Dir(path), payloadBaseName(path)); found {
+			report(progress, "done", 100, "already hydrated")
 			return out, nil
 		}
 		return "", fmt.Errorf("romcache: archive %s missing and no extracted payload found", path)
 	}
 
-	extracted, err := h.extract(path)
+	report(progress, "start", 0, filepath.Base(path))
+	extracted, err := h.extract(path, progress)
 	if err != nil {
 		return "", err
 	}
@@ -83,12 +98,31 @@ func (h *Hydrator) Resolve(path string) (string, error) {
 		h.Log.Warn().Err(err).Str("archive", path).
 			Msg("[ROMCACHE] extract succeeded but source archive removal failed")
 	}
+	report(progress, "done", 100, filepath.Base(extracted))
 	return extracted, nil
 }
 
+// ResolveNoProgress is Resolve without a progress callback, useful for
+// callers that don't have a UI or for unit tests that don't care.
+func (h *Hydrator) ResolveNoProgress(path string) (string, error) {
+	return h.Resolve(path, nil)
+}
+
+// report is a nil-safe dispatcher so callers don't have to guard every
+// progress emit.
+func report(p ProgressFunc, stage string, percent int, extras string) {
+	if p == nil {
+		return
+	}
+	p(stage, percent, extras)
+}
+
 // extract runs 7z against src, classifies the result (disc-image vs
-// filesystem-packed), and produces a bootable path alongside src.
-func (h *Hydrator) extract(src string) (string, error) {
+// filesystem-packed), and produces a bootable path alongside src. The
+// progress callback fires ~20 times during the 7z phase (one per 5%
+// of uncompressed bytes written) and once at each stage transition
+// ("extract" → "repack" → "done").
+func (h *Hydrator) extract(src string, progress ProgressFunc) (string, error) {
 	parent := filepath.Dir(src)
 	tmp, err := os.MkdirTemp(parent, ".extract-")
 	if err != nil {
@@ -100,10 +134,39 @@ func (h *Hydrator) extract(src string) (string, error) {
 	h.Log.Info().Str("src", filepath.Base(src)).Str("tmp", tmp).
 		Msg("[ROMCACHE] extract begin")
 
-	// -o<dir>: output directory. -y: assume yes. -bd: no progress bar.
+	// 7z's own percent output (-bsp1) uses backspace-based in-place
+	// terminal updates, which doesn't line-parse cleanly. Side-step
+	// that entirely: get the archive's uncompressed total up front,
+	// then a poll loop watches tmp's on-disk size and computes our
+	// own percent. Robust, no dependence on 7z's stdout formatting.
+	total, err := sevenZipUncompressedSize(src)
+	if err != nil {
+		// Non-fatal — extract continues with indeterminate progress.
+		h.Log.Warn().Err(err).Msg("[ROMCACHE] 7z listing failed; extract progress will be indeterminate")
+		total = 0
+	}
+
+	srcBase := payloadBaseName(src)
 	cmd := exec.Command("7z", "x", "-y", "-bd", "-o"+tmp, src)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("romcache: 7z x: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	var outBuf strings.Builder
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("romcache: 7z start: %w", err)
+	}
+	// Poll extraction progress until the process exits.
+	doneCh := make(chan struct{})
+	go pollExtractProgress(tmp, total, doneCh, func(pct int) {
+		if pct < 0 {
+			report(progress, "extract", -1, srcBase)
+			return
+		}
+		report(progress, "extract", pct, srcBase)
+	})
+	waitErr := cmd.Wait()
+	close(doneCh)
+	if waitErr != nil {
+		return "", fmt.Errorf("romcache: 7z x: %w (output: %s)", waitErr, strings.TrimSpace(outBuf.String()))
 	}
 
 	iso, isoFound, xbeDir, xbeFound, err := classify(tmp)
@@ -133,7 +196,10 @@ func (h *Hydrator) extract(src string) (string, error) {
 
 	case xbeFound:
 		// Filesystem-packed: invoke extract-xiso to repack the tree into
-		// a single xiso file next to the archive.
+		// a single xiso file next to the archive. extract-xiso doesn't
+		// emit machine-readable percent, so we mark the stage transition
+		// once and rely on the UI to show a spinner until "done".
+		report(progress, "repack", -1, filepath.Base(xbeDir))
 		if err := runExtractXiso(xbeDir, final); err != nil {
 			return "", fmt.Errorf("romcache: repack xiso: %w", err)
 		}
@@ -267,6 +333,85 @@ func fileSize(path string) (int64, error) {
 		return 0, err
 	}
 	return info.Size(), nil
+}
+
+// sevenZipUncompressedSize parses the "Size = <n>" total line out of
+// `7z l -slt <archive>`. Returns the sum of all per-file Size entries
+// — the total uncompressed bytes we expect to see in the extract dir
+// once 7z is done. On any parse failure returns (0, err) and the
+// caller falls back to indeterminate progress.
+func sevenZipUncompressedSize(archive string) (int64, error) {
+	out, err := exec.Command("7z", "l", "-slt", archive).Output()
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "Size = ") {
+			continue
+		}
+		v, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "Size = ")), 10, 64)
+		if err == nil {
+			total += v
+		}
+	}
+	if total == 0 {
+		return 0, fmt.Errorf("romcache: no Size entries in 7z listing")
+	}
+	return total, nil
+}
+
+// pollExtractProgress watches the extract tmp dir's on-disk size every
+// 500 ms and fires the callback with the progress-vs-total percent.
+// Exits when doneCh closes (the 7z process ended). Quantizes reports
+// to 5% steps so we don't spam the data channel.
+func pollExtractProgress(tmp string, total int64, doneCh <-chan struct{}, fn func(pct int)) {
+	lastReported := -1
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-doneCh:
+			if lastReported < 100 {
+				fn(100)
+			}
+			return
+		case <-ticker.C:
+			size := dirSize(tmp)
+			if total <= 0 {
+				// Unknown total: emit indeterminate pulse.
+				fn(-1)
+				continue
+			}
+			pct := int(size * 100 / total)
+			if pct > 99 {
+				pct = 99 // save 100 for the final close-doneCh flush
+			}
+			if pct/5 == lastReported/5 {
+				continue
+			}
+			lastReported = pct
+			fn(pct)
+		}
+	}
+}
+
+// dirSize recursively adds up file sizes under root. Walking errors
+// are swallowed — a transient filesystem hiccup during polling
+// shouldn't crash the hydrator.
+func dirSize(root string) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 // copyFile is the fallback for cross-filesystem finalize.

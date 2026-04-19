@@ -28,6 +28,12 @@ const endpoints = {
     // Worker→client broadcast: rcheevos just reported an unlock for
     // the host's RA account. Payload: {id, title, description, points, badge_url}.
     ACHIEVEMENT_UNLOCKED: 208,
+
+    // Worker→client broadcast: fires periodically while pkg/worker/romcache
+    // is hydrating a .7z-archived ROM before the emulator starts. Payload:
+    // {stage: 'start'|'extract'|'repack'|'done', percent: 0-100 or -1, extras: ''}.
+    // The browser's hydrateOverlay renders a loading UI until 'done'.
+    ROOM_HYDRATE_PROGRESS: 209,
 }
 
 let transport = {

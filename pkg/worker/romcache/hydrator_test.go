@@ -10,10 +10,30 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 )
 
+// TestDirSizeRecurses asserts that dirSize() counts every regular file
+// under root (including in subdirectories) while ignoring the
+// directory-entry metadata itself.
+func TestDirSizeRecurses(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a"), []byte("1234"), 0o644); err != nil {
+		t.Fatalf("a: %v", err)
+	}
+	sub := filepath.Join(root, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("mk: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "b"), []byte("12345"), 0o644); err != nil {
+		t.Fatalf("b: %v", err)
+	}
+	if got := dirSize(root); got != 9 {
+		t.Errorf("dirSize = %d, want 9", got)
+	}
+}
+
 // TestResolveNonArchive asserts the zero-cost passthrough.
 func TestResolveNonArchive(t *testing.T) {
 	h := &Hydrator{Log: logger.Default()}
-	got, err := h.Resolve("/some/path/game.iso")
+	got, err := h.ResolveNoProgress("/some/path/game.iso")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -66,7 +86,7 @@ func TestResolveDiscImagePacked(t *testing.T) {
 	}
 
 	h := &Hydrator{Log: logger.Default()}
-	got, err := h.Resolve(archive)
+	got, err := h.ResolveNoProgress(archive)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -120,7 +140,7 @@ func TestResolveFilesystemPacked(t *testing.T) {
 	}
 
 	h := &Hydrator{Log: logger.Default()}
-	got, err := h.Resolve(archive)
+	got, err := h.ResolveNoProgress(archive)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -185,10 +205,10 @@ func TestResolveRaceReuse(t *testing.T) {
 	}
 
 	h := &Hydrator{Log: logger.Default()}
-	if _, err := h.Resolve(archive); err != nil {
+	if _, err := h.ResolveNoProgress(archive); err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
-	got, err := h.Resolve(archive)
+	got, err := h.ResolveNoProgress(archive)
 	if err != nil {
 		t.Fatalf("second resolve: %v", err)
 	}

@@ -27,6 +27,27 @@ Search marker: `XEMU-WIP` (every skip calls `t.Skip("XEMU-WIP: ...")` so
 - `scripts/dev-sync.sh` test runner passes `CGO_LDFLAGS="-lm"` so `pkg/encoder/h264` links libx264 under `go test`. The prod Makefile provides this via its own LDFLAGS chain. No revisit needed unless we drop x264.
 - Tests are run with `-tags static,st,vulkan,nvenc` — matches prod.
 
+## ROM hydration progress bar (cosmetic)
+
+The hydrate-progress overlay shipped in `feat/romcache-progress-events`
+reaches the browser — `Preparing game…` renders correctly — but the
+percent tick never advances during the 30–90 s hydrate. Two candidates
+for why:
+
+- Data channel is still connecting during the bulk of hydrate, and
+  `Peer.SendData` silently drops writes before open. The first few
+  `stage=extract` messages should land after ~2 s, which doesn't match
+  what the user sees (overlay sits on "Preparing game…" the whole time).
+- The disk-polling loop (`pollExtractProgress` in `hydrator.go`) may
+  be computing from the wrong tree, or `sevenZipUncompressedSize` is
+  failing silently and we're emitting percent=-1 indeterminate for
+  the whole run.
+
+Next time someone picks this up, start with a worker-side log at each
+`progress(...)` call and a browser console.log of every
+`ROOM_HYDRATE_PROGRESS` message; the disconnect is between those two
+points. Not blocking — the feature works, just without a ticking bar.
+
 ## Phase-4 notes (audio capture)
 
 - **Xbox dashboard audio is silent** with our current MCPX + flash BIOS + HDD qcow2. The PipeWire/parec pipeline correctly captures ~200 chunks/2s at the expected 48 kHz S16LE cadence, but every sample is zero. `TestAudioCapture` therefore only asserts plumbing (chunks flow at ~100 Hz); real audio signal validation is proven separately via `tools/audio-canary` against a 440 Hz sine source (peak at 440 Hz ±1 bin, 218 dB SNR). Once we load a game ISO in Phase 7 the dashboard silence stops mattering — games exercise audio immediately. If someone wants dashboard audio: try deleting `~/.local/share/xemu/xemu/eeprom.bin` so xemu regenerates it, a different BIOS, or a retail dashboard on the HDD.

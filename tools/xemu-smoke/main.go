@@ -42,9 +42,8 @@ func main() {
 		verbose    = flag.Bool("v", false, "log per-iteration progress")
 		chaos      = flag.Bool("chaos", false, "kill -9 xemu mid-session; asserts the cage recovers cleanly (G2.3)")
 		chaosAt    = flag.Duration("chaos-at", 2*time.Second, "when during the hold window to kill -9 xemu (only with -chaos)")
-		preload    = flag.String("preload", "", "path to videocap_preload.so (enables Phase-3 capture path)")
-		minFrames  = flag.Int("min-frames", 0, "assert each iteration received at least N frames (only meaningful with -preload)")
-		dumpFrame  = flag.String("dump-frame", "", "dump the first captured RGBA frame to this path and log its SHA256 (useful for golden generation)")
+		minFrames  = flag.Int("min-frames", 0, "assert each iteration received at least N captured frames")
+		dumpFrame  = flag.String("dump-frame", "", "dump the 200th captured RGBA frame to this path and log its SHA256 (useful for golden generation)")
 		audio      = flag.Bool("audio", false, "enable Phase-4 PipeWire audio capture (requires pulseaudio-utils and pipewire in the container)")
 		minAudio   = flag.Int("min-audio-chunks", 0, "assert each iteration received at least N audio chunks (only meaningful with -audio)")
 		input      = flag.Bool("input", false, "enable Phase-5 uinput virtual gamepad (requires /dev/uinput writable)")
@@ -64,15 +63,14 @@ func main() {
 	defer cancel()
 
 	conf := config.XemuConfig{
-		Enabled:          true,
-		BinaryPath:       *binary,
-		BiosPath:         *biosDir,
-		XvfbDisplay:      *display,
-		Width:            640,
-		Height:           480,
-		VideoPreloadPath: *preload,
-		AudioCapture:     *audio,
-		InputInject:      *input,
+		Enabled:      true,
+		BinaryPath:   *binary,
+		BiosPath:     *biosDir,
+		XvfbDisplay:  *display,
+		Width:        640,
+		Height:       480,
+		AudioCapture: *audio,
+		InputInject:  *input,
 	}
 
 	failures := 0
@@ -114,15 +112,14 @@ func oneIteration(ctx context.Context, log *logger.Logger, conf config.XemuConfi
 	)
 	cage.SetVideoCb(func(v app.Video) {
 		frameCount++
-		// Use the cage's own live-flag so we're immune to coincidental
-		// stub/xemu dimension matches — 640×480 is both the stub default
-		// and xemu's framebuffer.
 		if cage.LiveFramesActive() {
 			liveFrames++
-			if firstFrame == nil {
-				firstFrame = append([]byte(nil), v.Frame.Data...)
-				firstW, firstH = v.Frame.W, v.Frame.H
-			}
+			// Keep updating until the iteration ends so the dump is the
+			// LAST frame, which is post-boot game content — previous
+			// implementations snapshotted an early frame and consistently
+			// captured splash/init state.
+			firstFrame = append(firstFrame[:0], v.Frame.Data...)
+			firstW, firstH = v.Frame.W, v.Frame.H
 		}
 	})
 	cage.SetAudioCb(func(a app.Audio) { audioChunks++ })

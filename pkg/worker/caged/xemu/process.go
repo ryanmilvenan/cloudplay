@@ -38,12 +38,6 @@ type Process struct {
 	// Display overrides Conf.XvfbDisplay when set (lets callers reuse the
 	// same config across sessions with distinct displays).
 	Display string
-	// PreloadPath is the path to videocap_preload.so. When set, LD_PRELOAD
-	// is pushed into xemu's env so the shim captures frames via glXSwapBuffers.
-	PreloadPath string
-	// VideocapSock is the Unix socket the preload shim will connect to.
-	// Required when PreloadPath is set; exported via CLOUDPLAY_VIDEOCAP_SOCKET.
-	VideocapSock string
 	// PulseServer, if non-empty, is pushed as PULSE_SERVER so xemu's SDL
 	// audio backend connects to a specific pulse/pipewire-pulse instance.
 	// When empty, SDL_AUDIODRIVER=dummy is set (Phase-2 behavior).
@@ -117,12 +111,6 @@ func (p *Process) Start() error {
 		// Headless no-audio path — used when AudioCapture is disabled.
 		env = append(env, "SDL_AUDIODRIVER=dummy")
 	}
-	if p.PreloadPath != "" {
-		env = append(env, "LD_PRELOAD="+p.PreloadPath)
-		if p.VideocapSock != "" {
-			env = append(env, "CLOUDPLAY_VIDEOCAP_SOCKET="+p.VideocapSock)
-		}
-	}
 	p.cmd.Env = env
 	p.cmd.Stdout = newStreamLogger(p.Log, "[XEMU-PROC] ")
 	p.cmd.Stderr = newStreamLogger(p.Log, "[XEMU-PROC] ")
@@ -137,7 +125,6 @@ func (p *Process) Start() error {
 	p.waitCh = make(chan struct{})
 	p.Log.Info().Int("pid", p.cmd.Process.Pid).Str("display", display).
 		Str("flash", flash).Str("boot", boot).Str("hdd", hdd).
-		Str("preload", p.PreloadPath).Str("videocap_sock", p.VideocapSock).
 		Msg("[XEMU-PROC] started")
 
 	go p.waitLoop()

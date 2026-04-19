@@ -32,19 +32,7 @@ build.worker:
 		-ldflags "-w -s -X 'main.Version=$(GIT_VERSION)'" $(EXT_WFLAGS) \
 		-o bin/ ./cmd/worker
 
-# LD_PRELOAD shim used by the xemu native-emulator backend to capture GL
-# frames out of xemu (see pkg/worker/caged/xemu/videocap_preload.c).
-# Linked against libGL for glReadPixels / glGetIntegerv, libdl for dlsym,
-# libpthread for the send mutex. Output is a standalone .so — do NOT link
-# into the worker binary.
-build.xemu-preload:
-	mkdir -p bin/
-	gcc -shared -fPIC -O2 -Wall \
-		pkg/worker/caged/xemu/preload/videocap_preload.c \
-		-ldl -lGL -lpthread \
-		-o bin/videocap_preload.so
-
-build: build.coordinator build.worker build.xemu-preload
+build: build.coordinator build.worker
 
 test:
 	go test -v ./pkg/...

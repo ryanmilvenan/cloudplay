@@ -34,7 +34,8 @@ Volume=/home/rocks/containers/cloudplay-dev/out:/out:z
 # but we keep the whole dir on one mount for simplicity.
 Volume=/home/rocks/containers/cloudplay-dev/xemu-bios:/xemu-bios:z
 # Optional: test ROMs for harness use.
-Volume=/home/rocks/containers/cloudplay-dev/games:/games:ro,z
+# games: rw so extract-xiso can rewrite in place and xemu can write save data
+Volume=/home/rocks/containers/cloudplay-dev/games:/games:z
 
 # Mirror production's Vulkan ICD + display env so behavior matches.
 Volume=/usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro

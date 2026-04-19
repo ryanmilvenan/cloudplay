@@ -189,55 +189,31 @@ func TestProcessLifecycle(t *testing.T) {
 	}
 }
 
-// findPreload returns the absolute path to the compiled videocap_preload.so
-// (Phase 3). The canonical build target (Makefile build.xemu-preload) writes
-// it to ./bin/videocap_preload.so at the repo root. Returns "" when absent.
-func findPreload() string {
-	for _, p := range []string{
-		"../../../../bin/videocap_preload.so",
-		"/src/bin/videocap_preload.so",
-		"/out/videocap_preload.so",
-		os.Getenv("XEMU_VIDEOCAP_PRELOAD"),
-	} {
-		if p == "" {
-			continue
-		}
-		if abs, err := filepath.Abs(p); err == nil {
-			if _, err := os.Stat(abs); err == nil {
-				return abs
-			}
-		}
-	}
-	return ""
-}
-
-// TestVideoCapture is the Phase-3 G3.2-in-CI gate: drive xemu under the
-// LD_PRELOAD shim, assert (a) live frames arrive within 2 s of Start and
-// (b) steady-state rate is >=30 fps across a 5 s window. Stricter rate bands
-// live in the xemu-smoke harness. Skipped when the preload artifact isn't
-// around (no BIOS, no compiled .so, or running on a non-Linux box).
+// TestVideoCapture is the Phase-3 G3.2-in-CI gate: drive xemu under an
+// ffmpeg x11grab capture pipe, assert (a) live frames arrive within 2 s of
+// Start and (b) steady-state rate is >=30 fps across a 5 s window. Stricter
+// rate bands live in the xemu-smoke harness. Skipped when xemu or ffmpeg
+// aren't on PATH.
 func TestVideoCapture(t *testing.T) {
 	bios, ok := findBiosDir()
 	if !ok {
 		t.Skip("XEMU-WIP: /xemu-bios not present — run inside cloudplay-dev")
 	}
-	preload := findPreload()
-	if preload == "" {
-		t.Skip("XEMU-WIP: videocap_preload.so not built — run 'make build.xemu-preload'")
-	}
 	if _, err := exec.LookPath("xemu"); err != nil {
 		t.Skip("xemu binary not on PATH")
+	}
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not on PATH")
 	}
 
 	log := logger.NewConsole(false, "xemu-test", false)
 	c := Cage(CagedConf{Xemu: config.XemuConfig{
-		Enabled:          true,
-		BinaryPath:       "xemu",
-		BiosPath:         bios,
-		XvfbDisplay:      ":103",
-		Width:            640,
-		Height:           480,
-		VideoPreloadPath: preload,
+		Enabled:     true,
+		BinaryPath:  "xemu",
+		BiosPath:    bios,
+		XvfbDisplay: ":103",
+		Width:       640,
+		Height:      480,
 	}}, log)
 	if err := c.Init(); err != nil {
 		t.Fatalf("Init: %v", err)

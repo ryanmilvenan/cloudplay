@@ -148,6 +148,32 @@ let liveAi = null;
 // graduates. Drives the small info button anchored to the breath.
 let liveRetrieved = null;
 
+// Breath auto-fade. After the response arrives, hold the big
+// "voice of god" line for BREATH_HOLD_MS, then gracefully graduate
+// it into the chain so the cinematic moment doesn't linger forever.
+// The user can always re-open the retrieved candidates via the info
+// button on the chain entry, so nothing is lost.
+const BREATH_HOLD_MS = 8000;
+let breathHoldTimer = null;
+
+const clearBreathHold = () => {
+    if (breathHoldTimer) {
+        clearTimeout(breathHoldTimer);
+        breathHoldTimer = null;
+    }
+};
+
+const graduateBreath = () => {
+    clearBreathHold();
+    if (liveAi) {
+        pushTurn('ai', liveAi, liveRetrieved);
+        liveAi = null;
+        liveRetrieved = null;
+    }
+    showBreath(null);
+    setBreathInfoVisible(false);
+};
+
 const setBreathInfoVisible = (show) => {
     const el = breathInfoEl();
     if (!el) return;
@@ -242,7 +268,9 @@ export const ask = async (query) => {
     if (!query || !query.trim()) return;
     // Previous AI response graduates from breath → chain, carrying
     // its retrieved set so the user can still open "what did the
-    // agent see" on the older turn.
+    // agent see" on the older turn. Also cancels any pending
+    // auto-fade timer — the new turn is taking over.
+    clearBreathHold();
     if (liveAi) {
         pushTurn('ai', liveAi, liveRetrieved);
         liveAi = null;
@@ -280,6 +308,13 @@ export const ask = async (query) => {
         setBreathInfoVisible(!!(retrieved && retrieved.length));
         history.push({role: 'agent', text});
         trimHistory();
+        // Start the auto-fade countdown. The response is already
+        // recorded in `history` (for the next turn's prompt) and
+        // about to land in the chain (where the info button still
+        // exposes the retrieved set), so we don't need to hold the
+        // voice-of-god line on-screen forever.
+        clearBreathHold();
+        breathHoldTimer = setTimeout(graduateBreath, BREATH_HOLD_MS);
     }
 
     // Launch action: after the breath shows briefly, kick the normal
@@ -302,6 +337,7 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
 // Clear the whole AI flow — called when the user picks a fuzzy result
 // (no pending clarifying conversation) or when a game actually launches.
 export const clearConversation = () => {
+    clearBreathHold();
     turns.length = 0;
     liveAi = null;
     liveRetrieved = null;
@@ -319,6 +355,7 @@ export const clearConversation = () => {
 export const onUserTyping = () => {
     const el = breathEl();
     if (!el || !el.classList.contains('is-visible')) return;
+    clearBreathHold();
     if (liveAi) {
         pushTurn('ai', liveAi, liveRetrieved);
         liveAi = null;

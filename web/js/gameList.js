@@ -251,6 +251,19 @@ export const gameList = {
     },
     show() {
         if (screenEl) screenEl.style.display = '';
+        // Reset everything the previous session may have left behind:
+        // startGame() calls disable() and leaves the filtered list
+        // pointing at the launched game, which — once we're back at
+        // the menu after leaving — would otherwise show a stale Halo
+        // row stuck in the dropdown AND swallow every keystroke because
+        // state.disabled is still true. Clearing here gives a clean
+        // slate without callers having to know about these internals.
+        state.disabled = false;
+        state.filtered = [];
+        state.selected = 0;
+        if (inputEl) inputEl.value = '';
+        clearTimeout(semanticTimer);
+        renderResults();
         mount();
     },
     hide() {

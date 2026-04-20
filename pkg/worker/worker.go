@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/libretro"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/cloud"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/enricher"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/rcheevos"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/romcache"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/room"
@@ -45,6 +47,12 @@ type Worker struct {
 	// across sessions so concurrent launches of the same archive
 	// serialize correctly.
 	hyd *romcache.Hydrator
+
+	// enr handles per-game IGDB metadata backfill. Nil when
+	// conf.Igdb.Enabled is false or credentials aren't readable. When
+	// present, it hydrates GameMetadata during library.Scan from its
+	// on-disk cache and queues misses for background lookup.
+	enr *enricher.Enricher
 }
 
 func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
@@ -62,6 +70,33 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 	}
 
 	library := games.NewLib(conf.Library, conf.Emulator, log)
+
+	// IGDB enrichment (Phase 2). Best-effort: a credential file that
+	// won't open, a cache path that can't be created, or igdb.enabled=false
+	// all leave `enr` nil — library.Scan still runs, just without any
+	// genre/year/summary data on game cards. Constructed BEFORE
+	// library.Scan so SetEnrichFn fires against the very first scan.
+	var enr *enricher.Enricher
+	if conf.Igdb.Enabled {
+		cli, err := enricher.NewClient(conf.Igdb.CredentialsFile)
+		if err != nil {
+			log.Warn().Err(err).Msg("IGDB enrichment disabled — couldn't load credentials")
+		} else {
+			cache, err := enricher.NewCache(conf.Igdb.CachePath)
+			if err != nil {
+				log.Warn().Err(err).Msg("IGDB enrichment disabled — cache init failed")
+			} else {
+				enr = enricher.New(cli, cache, conf.Igdb.RequestsPerSecond, conf.Igdb.MinConfidence, log)
+				library.SetEnrichFn(func(g *games.GameMetadata) {
+					// Hydrate from cache (zero I/O beyond SQLite); queue for
+					// background lookup when the cache has nothing yet.
+					enr.ApplyCached(g)
+					enr.Enqueue(*g)
+				})
+				log.Info().Msg("[IGDB] enricher armed")
+			}
+		}
+	}
 	library.Scan()
 
 	worker := &Worker{
@@ -72,6 +107,24 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 		mana:     manager,
 		router:   room.NewGameRouter(),
 		hyd:      &romcache.Hydrator{Log: log},
+		enr:      enr,
+	}
+
+	// Kick the enricher's background loop. OnBatchComplete re-broadcasts
+	// the library so newly-enriched fields reach connected browsers
+	// without a page reload. Uses context.Background — the loop is tied
+	// to the process lifetime; worker has no explicit shutdown context
+	// to cancel against today.
+	if enr != nil {
+		enr.OnBatchComplete = func() {
+			if worker.cord != nil {
+				// Re-apply cache into the library (cheap) so GetAll()
+				// returns the enriched rows, then broadcast.
+				worker.lib.Scan()
+				worker.cord.SendLibrary(worker)
+			}
+		}
+		go enr.Run(context.Background())
 	}
 
 	h, err := httpx.NewServer(

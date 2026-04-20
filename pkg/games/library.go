@@ -45,6 +45,11 @@ type library struct {
 
 	emuConf WithEmulatorInfo
 
+	// enrichFn is the optional per-game hook set by SetEnrichFn —
+	// typically the IGDB enricher's ApplyCached-then-Enqueue shim.
+	// Called during Scan for each game before it hits the games map.
+	enrichFn func(*GameMetadata)
+
 	// to restrict parallel execution or throttling
 	// for file watch mode
 	mu                sync.Mutex
@@ -52,11 +57,23 @@ type library struct {
 	isScanningDelayed bool
 }
 
+func (lib *library) SetEnrichFn(fn func(*GameMetadata)) {
+	lib.mu.Lock()
+	defer lib.mu.Unlock()
+	lib.enrichFn = fn
+}
+
 type GameLibrary interface {
 	GetAll() []GameMetadata
 	FindGameByName(name string) GameMetadata
 	Sessions() []string
 	Scan()
+	// SetEnrichFn registers a callback invoked for every GameMetadata
+	// produced during Scan, before it's persisted. Used by the IGDB
+	// enricher to hydrate genre/year/summary from its on-disk cache
+	// and to queue un-enriched titles for background backfill. No-op
+	// when fn is nil; re-setting replaces the prior hook.
+	SetEnrichFn(fn func(*GameMetadata))
 }
 
 type WithEmulatorInfo interface {
@@ -77,6 +94,15 @@ type GameMetadata struct {
 	// the default; "xemu" routes to the native xemu backend. Set during
 	// library scan from the system's config entry.
 	Backend string
+	// IGDB enrichment (Phase 2). Populated by pkg/worker/enricher via
+	// library.ApplyEnrichment during library scan. Stays empty when
+	// igdb.enabled=false or the game hasn't been backfilled yet — the
+	// scan always succeeds regardless of enrichment state.
+	Genre     string
+	Franchise string
+	Year      int
+	Summary   string
+	CoverURL  string
 }
 
 func (g GameMetadata) FullPath(base string) string {
@@ -237,6 +263,14 @@ func (lib *library) Scan() {
 				ignored = true
 				break
 			}
+		}
+
+		// IGDB enrichment hook. Runs before append so cached fields
+		// flow into the very first broadcast; new titles get queued
+		// for background backfill. No-op when no hook is installed
+		// (the default while igdb.enabled=false).
+		if !ignored && lib.enrichFn != nil {
+			lib.enrichFn(&meta)
 		}
 
 		if !ignored {

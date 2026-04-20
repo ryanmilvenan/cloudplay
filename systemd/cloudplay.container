@@ -48,6 +48,12 @@ Volume=/home/rocks/containers/cloudplay/cores:/usr/local/share/cloud-game/assets
 Volume=/home/rocks/containers/cloudplay/saves:/root/.cr/save:z
 Volume=/home/rocks/containers/cloudplay/libretro/system:/usr/local/share/cloud-game/libretro/system:z
 Volume=/home/rocks/containers/cloudplay/libretro/saves:/usr/local/share/cloud-game/libretro-save:z
+# IGDB credentials — bind-mounted read-only from the host so they
+# never live in the repo. File contains CLOUD_GAME_IGDB_CLIENT_ID and
+# CLOUD_GAME_IGDB_CLIENT_SECRET; path matches config.yaml's
+# igdb.credentialsFile. 0600 on the host side.
+Volume=/home/rocks/containers/cloudplay/secrets:/secrets:ro,z
+
 # xemu BIOS (MCPX + flash) + HDD qcow2. Must be rw because xemu writes
 # back to the qcow2 for save games, eeprom, dashboard settings. Empty
 # dir + xemu.enabled=false (config.yaml default) is fine — only the

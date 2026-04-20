@@ -94,3 +94,9 @@ games/
 # xemu AppImage extraction — staged by scripts/extract-xemu.sh for
 # Dockerfile.run to COPY in. Regenerable; don't commit the ~100MB blob.
 vendor/xemu/
+
+### Secrets (IGDB OAuth, future API keys) — live on moon under
+### ~/containers/cloudplay/secrets/ and are bind-mounted read-only into
+### the worker. Never commit.
+/secrets/
+*.env

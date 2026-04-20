@@ -21,6 +21,7 @@ type WorkerConfig struct {
 	Webrtc    Webrtc
 	Version   Version
 	Xemu      XemuConfig
+	Igdb      IgdbConfig
 }
 
 type Storage struct {

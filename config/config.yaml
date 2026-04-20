@@ -351,3 +351,19 @@ xemu:
   xvfbDisplay: ':100'
   width: 640
   height: 480
+
+# IGDB per-game metadata enrichment (Phase 2 of the search-and-AI
+# rework). Populates genre / year / franchise / summary / cover URL on
+# each GameMetadata so the frontend can render richer game cards and
+# the Phase-3 semantic-search index has meaningful text to embed.
+#
+# Disabled by default; enable per-host once credentials are in place.
+# Client ID + secret live in a bind-mounted file on the host (NEVER in
+# this repo). Cache is a SQLite file on the NAS so backfill survives
+# container rebuilds.
+igdb:
+  enabled: false
+  credentialsFile: /secrets/igdb.env
+  cachePath: /var/mnt/data/media/games/.metadata/igdb.db
+  requestsPerSecond: 4
+  minConfidence: 0.6

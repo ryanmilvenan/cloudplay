@@ -21,6 +21,13 @@ type AppMeta struct {
 	System  string
 	Type    string
 	Backend string
+	// IGDB enrichment fields — must mirror GameMetadata field order
+	// exactly so `AppMeta(GameMetadata)` struct conversion compiles.
+	Genre     string
+	Franchise string
+	Year      int
+	Summary   string
+	CoverURL  string
 }
 
 type GameLauncher struct {

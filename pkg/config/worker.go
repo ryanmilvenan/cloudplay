@@ -21,6 +21,9 @@ type WorkerConfig struct {
 	Webrtc    Webrtc
 	Version   Version
 	Xemu      XemuConfig
+	Igdb      IgdbConfig
+	Search    SemanticSearchConfig `yaml:"search"`
+	Agent     AgentConfig          `yaml:"agent"`
 }
 
 type Storage struct {

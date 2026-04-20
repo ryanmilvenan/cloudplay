@@ -35,6 +35,18 @@ type (
 		Alias  string `json:"alias,omitempty"`
 		Title  string `json:"title"`
 		System string `json:"system"`
+		// Path is the library-relative filename (e.g.
+		// "xbox/Halo.xiso.iso"). Exposed to the browser so the
+		// Phase-3 semantic-search blend can match incoming hits
+		// (which key on {game_path, system}) against the local
+		// library shown in the search bar. Not used for anything
+		// else client-side.
+		Path string `json:"path,omitempty"`
+		// CoverURL is the IGDB cover art (cover_big, 264x374) the
+		// Phase-1 search cards render as a thumbnail. Empty string
+		// when the game hasn't been IGDB-matched yet or the match
+		// had no cover asset.
+		CoverURL string `json:"cover_url,omitempty"`
 	}
 	WebrtcAnswerUserRequest string
 	WebrtcUserIceCandidate  string

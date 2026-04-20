@@ -351,3 +351,44 @@ xemu:
   xvfbDisplay: ':100'
   width: 640
   height: 480
+
+# IGDB per-game metadata enrichment (Phase 2 of the search-and-AI
+# rework). Populates genre / year / franchise / summary / cover URL on
+# each GameMetadata so the frontend can render richer game cards and
+# the Phase-3 semantic-search index has meaningful text to embed.
+#
+# Disabled by default; enable per-host once credentials are in place.
+# Client ID + secret live in a bind-mounted file on the host (NEVER in
+# this repo). Cache is a SQLite file on the NAS so backfill survives
+# container rebuilds.
+igdb:
+  enabled: false
+  credentialsFile: /secrets/igdb.env
+  cachePath: /var/mnt/data/media/games/.metadata/igdb.db
+  requestsPerSecond: 4
+  minConfidence: 0.6
+
+# Phase-3 semantic search. Uses spark@lightning's ai-openclaw-embeddings
+# service (Qwen3-Embedding-0.6B via vLLM, 1024-dim vectors, pooling
+# runner at 5% GPU so it coexists with coder+concierge without thrashing).
+# Requires igdb.enabled=true so the enricher has metadata text to embed.
+# Disabled by default; flip to true per-host.
+search:
+  enabled: false
+  embedUrl: http://lightning.local:8088/v1/embeddings
+  embedModel: embeddings
+  batchSize: 32
+  requestsPerSecond: 4
+
+# Phase-4 conversational agent (gemma4:e4b via local Ollama). Receives
+# natural-language queries from the browser's search-bar Enter path,
+# runs retrieval against the Phase-3 vector index, and emits one of
+# four actions (ask / recommend / launch / say). Disabled by default;
+# when off the frontend stays on the Phase-1 "agent offline" stub.
+# Requires search.enabled=true to be useful.
+agent:
+  enabled: false
+  ollamaUrl: http://localhost:11434
+  model: gemma4:e4b
+  timeoutMs: 8000
+  topK: 10

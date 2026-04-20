@@ -28,6 +28,15 @@ type (
 		System  string `json:"system"`
 		Type    string `json:"type"`
 		Backend string `json:"backend,omitempty"`
+		// IGDB-sourced enrichment (Phase 2). All optional — the cache
+		// may be empty, or a ROM may not match any IGDB record. The
+		// frontend and the semantic-search index (Phase 3) treat these
+		// as best-effort context, never required.
+		Genre     string `json:"genre,omitempty"`
+		Franchise string `json:"franchise,omitempty"`
+		Year      int    `json:"year,omitempty"`
+		Summary   string `json:"summary,omitempty"`
+		CoverURL  string `json:"cover_url,omitempty"`
 	}
 	StartGameResponse struct {
 		Room

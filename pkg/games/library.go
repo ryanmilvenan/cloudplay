@@ -238,6 +238,16 @@ func (lib *library) Scan() {
 			return err
 		}
 
+		// Skip hidden directories (. prefix) entirely — this is where
+		// we keep things like .backups/ that hold operator-side
+		// artifacts, .metadata/ for the IGDB sqlite db, etc. Without
+		// this skip the scanner pulls those files into the library
+		// and the browser ends up with phantom "games" like an Xbox
+		// BIOS zip listed under mame.
+		if info != nil && info.IsDir() && strings.HasPrefix(info.Name(), ".") && path != dir {
+			return fs.SkipDir
+		}
+
 		if info == nil || info.IsDir() || !lib.isExtAllowed(path) {
 			return nil
 		}

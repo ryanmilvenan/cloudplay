@@ -81,9 +81,11 @@ nvram/
 
 
 
-### ROMs (never tracked — live on moon under assets/games/, .gitignored here)
+### ROMs (never tracked — live on moon under assets/games/, .gitignored here).
+### Leading slash scopes the pattern to the repo root so `pkg/games/` (the
+### Go package that owns library scanning) isn't caught by it.
 assets/games/
-games/
+/games/
 
 ### Runtime data (lives on deployment target, never in git)
 /cores/

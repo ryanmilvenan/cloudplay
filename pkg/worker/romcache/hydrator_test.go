@@ -169,19 +169,46 @@ func TestClassifyPrefersIso(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(xbeDir, "default.xbe"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("xbe: %v", err)
 	}
-	isoPath, isoFound, _, xbeFound, err := classify(dir)
+	shape, err := classify(dir)
 	if err != nil {
 		t.Fatalf("classify: %v", err)
 	}
-	if !isoFound {
-		t.Error("expected iso to be found")
+	if shape.kind != "disc-image" {
+		t.Errorf("expected kind=disc-image, got %q", shape.kind)
 	}
-	if !xbeFound {
-		t.Error("expected xbe to be found too")
+	if shape.isoPath == "" {
+		t.Error("isoPath empty despite disc-image kind")
 	}
-	// extract() should branch on iso first — spot-check isoPath isn't empty.
-	if isoPath == "" {
-		t.Error("isoPath empty despite isoFound=true")
+	if shape.xbeDir == "" {
+		t.Error("xbeDir empty — classify should record both even though iso wins")
+	}
+}
+
+// TestClassifyGdi covers the Dreamcast multi-track shape: a .gdi plus
+// track files at the archive root. classify() should return kind="gdi"
+// and a gdiPath pointing at the .gdi file.
+func TestClassifyGdi(t *testing.T) {
+	dir := t.TempDir()
+	writes := []struct{ name, body string }{
+		{"Power Stone 2 (USA).gdi", "3\n1 0 4 2352 track01.bin 0\n"},
+		{"track01.bin", "x"},
+		{"track02.raw", "x"},
+		{"track03.bin", "x"},
+	}
+	for _, w := range writes {
+		if err := os.WriteFile(filepath.Join(dir, w.name), []byte(w.body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", w.name, err)
+		}
+	}
+	shape, err := classify(dir)
+	if err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+	if shape.kind != "gdi" {
+		t.Errorf("expected kind=gdi, got %q", shape.kind)
+	}
+	if shape.gdiPath == "" {
+		t.Error("gdiPath empty despite gdi kind")
 	}
 }
 

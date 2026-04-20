@@ -1,15 +1,22 @@
 // Package romcache rehydrates compressed ROM archives in place next
-// to their source archives on the NAS. Two archive shapes are handled:
+// to their source archives on the NAS. Three archive shapes are handled:
 //
-//   - **Disc-image-packed**: the archive contains a single .iso / .xiso
-//     file (maybe nested a folder deep). We just extract it.
-//   - **Filesystem-packed**: the archive contains the *extracted* Xbox
-//     file tree (`<Title>/default.xbe`, `<Title>/maps/*.map`, …).
-//     xemu can't boot from loose files — we repack into an XISO via
+//   - **Disc-image-packed** (Xbox): the archive contains a single
+//     .iso / .xiso file (maybe nested a folder deep). Extract and
+//     drop it next to the archive.
+//   - **Filesystem-packed** (Xbox): the archive contains the *extracted*
+//     Xbox file tree (`<Title>/default.xbe`, `<Title>/maps/*.map`, …).
+//     xemu can't boot from loose files — repack into an XISO via
 //     `extract-xiso -c <dir> <out.xiso>`.
+//   - **GDI multi-track** (Dreamcast): the archive contains `<title>.gdi`
+//     alongside `track01.bin` / `track02.raw` / `track03.bin` / etc.
+//     Flycast loads the .gdi and follows relative track references, so
+//     we keep the files together — each archive extracts into its own
+//     `<parent>/<title>/` subdirectory (track filenames collide across
+//     games, so a per-title folder is the only safe layout).
 //
 // After a successful hydration the source archive is removed so the
-// next library scan sees a plain ISO (or XISO) and the 7z no longer
+// next library scan sees the extracted payload and the 7z no longer
 // lingers alongside.
 //
 // Flow (Resolve):
@@ -20,9 +27,11 @@
 //     scan its directory for a matching extracted payload.
 //  4. Otherwise, 7z x into a sibling .extract-XXXX temp dir.
 //  5. Classify the extracted tree:
-//       - Has a top-level .iso / .xiso file → move it next to the archive.
-//       - Has default.xbe (anywhere in the tree) → extract-xiso -c
-//         the containing dir into a <title>.xiso next to the archive.
+//       - .iso / .xiso top-level → move next to the archive.
+//       - default.xbe anywhere → extract-xiso -c the containing dir
+//         into a <title>.xiso next to the archive.
+//       - .gdi at root → rename the extract dir to <parent>/<title>/
+//         and return the .gdi path inside.
 //       - Otherwise, error.
 //  6. Atomic-rename / extract-xiso finalize.
 //  7. os.Remove the source archive.
@@ -169,21 +178,20 @@ func (h *Hydrator) extract(src string, progress ProgressFunc) (string, error) {
 		return "", fmt.Errorf("romcache: 7z x: %w (output: %s)", waitErr, strings.TrimSpace(outBuf.String()))
 	}
 
-	iso, isoFound, xbeDir, xbeFound, err := classify(tmp)
+	shape, err := classify(tmp)
 	if err != nil {
 		return "", err
 	}
 
-	final := filepath.Join(parent, payloadBaseName(src)+".xiso")
-	switch {
-	case isoFound:
+	switch shape.kind {
+	case "disc-image":
 		// Disc-image-packed: rename the extracted iso next to the archive.
 		// Use the .xiso extension so xemu's mime-sniff treats it as an
 		// Xbox disc. (xemu accepts .iso too, but .xiso is the idiomatic
 		// name when the content is xiso-format.)
-		final = filepath.Join(parent, filepath.Base(iso))
-		if err := os.Rename(iso, final); err != nil {
-			if cpErr := copyFile(iso, final); cpErr != nil {
+		final := filepath.Join(parent, filepath.Base(shape.isoPath))
+		if err := os.Rename(shape.isoPath, final); err != nil {
+			if cpErr := copyFile(shape.isoPath, final); cpErr != nil {
 				return "", fmt.Errorf("romcache: finalize %s: rename=%v, copy=%v", final, err, cpErr)
 			}
 		}
@@ -194,13 +202,14 @@ func (h *Hydrator) extract(src string, progress ProgressFunc) (string, error) {
 			Msg("[ROMCACHE] extract done")
 		return final, nil
 
-	case xbeFound:
+	case "filesystem":
 		// Filesystem-packed: invoke extract-xiso to repack the tree into
 		// a single xiso file next to the archive. extract-xiso doesn't
 		// emit machine-readable percent, so we mark the stage transition
 		// once and rely on the UI to show a spinner until "done".
-		report(progress, "repack", -1, filepath.Base(xbeDir))
-		if err := runExtractXiso(xbeDir, final); err != nil {
+		final := filepath.Join(parent, payloadBaseName(src)+".xiso")
+		report(progress, "repack", -1, filepath.Base(shape.xbeDir))
+		if err := runExtractXiso(shape.xbeDir, final); err != nil {
 			return "", fmt.Errorf("romcache: repack xiso: %w", err)
 		}
 		size, _ := fileSize(final)
@@ -210,20 +219,63 @@ func (h *Hydrator) extract(src string, progress ProgressFunc) (string, error) {
 			Msg("[ROMCACHE] extract done")
 		return final, nil
 
+	case "gdi":
+		// GDI multi-track (Dreamcast): the .gdi references track files
+		// by relative path, so everything must live in the same dir.
+		// Track filenames (track01.bin, track02.raw, …) collide across
+		// games, so we put each game in its own <parent>/<title>/ subdir.
+		// Rename the entire extract temp dir into its final home.
+		finalDir := filepath.Join(parent, payloadBaseName(src))
+		// If an earlier extract left a stale dir behind, clear it so
+		// the rename succeeds.
+		if _, err := os.Stat(finalDir); err == nil {
+			if err := os.RemoveAll(finalDir); err != nil {
+				return "", fmt.Errorf("romcache: clear stale %s: %w", finalDir, err)
+			}
+		}
+		// The tmp dir is on the same filesystem as parent (we created
+		// it with MkdirTemp(parent, …)), so rename is atomic.
+		if err := os.Rename(tmp, finalDir); err != nil {
+			return "", fmt.Errorf("romcache: rename %s → %s: %w", tmp, finalDir, err)
+		}
+		// extract() has a defer os.RemoveAll(tmp) that would now miss —
+		// the dir moved. RemoveAll on a missing path is a no-op so no
+		// damage, but mark the var empty for clarity.
+		tmp = ""
+		final := filepath.Join(finalDir, filepath.Base(shape.gdiPath))
+		size, _ := dirSizeInt64(finalDir)
+		h.Log.Info().Str("final", final).Int64("bytes", size).
+			Dur("elapsed", time.Since(start)).
+			Str("shape", "gdi").
+			Msg("[ROMCACHE] extract done")
+		return final, nil
+
 	default:
-		return "", fmt.Errorf("romcache: archive contains neither an .iso/.xiso nor a default.xbe (%s)", src)
+		return "", fmt.Errorf("romcache: archive %s matched no known shape (no .iso/.xiso, no default.xbe, no .gdi)", src)
 	}
 }
 
+// dirSizeInt64 wraps dirSize to return (bytes, nil) — provides the
+// same shape as fileSize so logging code can stay consistent across
+// "shape==file" (xbox) and "shape==dir" (dreamcast) outputs.
+func dirSizeInt64(root string) (int64, error) { return dirSize(root), nil }
+
+// extractShape summarizes what a classify() walk found in the extracted
+// tmp tree. Only one of {isoPath, xbeDir, gdiPath} is meaningful,
+// selected by `kind`.
+type extractShape struct {
+	kind    string // "disc-image" | "filesystem" | "gdi" | "unknown"
+	isoPath string
+	xbeDir  string
+	gdiPath string
+}
+
 // classify walks the extracted directory and decides which shape we
-// got. Returns (isoPath, true, "", false) for disc-image shape or
-// ("", false, xbeDir, true) for filesystem shape. If neither matches
-// both bools are false.
-//
-// When both shapes are present (weird: an archive with both an ISO
-// *and* a filesystem extraction), prefer the ISO — it's the thing the
-// emulator can boot with less work.
-func classify(root string) (isoPath string, isoFound bool, xbeDir string, xbeFound bool, err error) {
+// got. Precedence when multiple signals are present: disc-image beats
+// filesystem (ISO is already boot-ready, no repack needed) beats gdi.
+// In practice archives are single-shape so precedence rarely matters.
+func classify(root string) (extractShape, error) {
+	var s extractShape
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			return werr
@@ -234,20 +286,30 @@ func classify(root string) (isoPath string, isoFound bool, xbeDir string, xbeFou
 		name := strings.ToLower(d.Name())
 		switch {
 		case strings.HasSuffix(name, ".iso") || strings.HasSuffix(name, ".xiso"):
-			isoPath = path
-			isoFound = true
+			s.isoPath = path
 		case name == "default.xbe":
 			// default.xbe lives at the root of the Xbox game's filesystem.
 			// Its parent directory is what extract-xiso -c will repack.
-			xbeDir = filepath.Dir(path)
-			xbeFound = true
+			s.xbeDir = filepath.Dir(path)
+		case strings.HasSuffix(name, ".gdi"):
+			s.gdiPath = path
 		}
 		return nil
 	})
 	if walkErr != nil {
-		return "", false, "", false, fmt.Errorf("romcache: walk extracted tree: %w", walkErr)
+		return extractShape{}, fmt.Errorf("romcache: walk extracted tree: %w", walkErr)
 	}
-	return isoPath, isoFound, xbeDir, xbeFound, nil
+	switch {
+	case s.isoPath != "":
+		s.kind = "disc-image"
+	case s.xbeDir != "":
+		s.kind = "filesystem"
+	case s.gdiPath != "":
+		s.kind = "gdi"
+	default:
+		s.kind = "unknown"
+	}
+	return s, nil
 }
 
 // runExtractXiso packs the given filesystem directory into an xiso
@@ -278,27 +340,48 @@ func runExtractXiso(srcDir, finalPath string) error {
 }
 
 // findLikelyPayload handles the post-race case where the archive is
-// already gone. Scans for a file whose base name matches what we would
-// have produced. Returns ("", false) if nothing obvious is there.
+// already gone. Scans for something whose name matches what we would
+// have produced.
 //
-// Matches: <stem>.iso, <stem>.xiso. Case-insensitive.
+// Matches, in order:
+//  1. File <stem>.iso / <stem>.xiso (Xbox output).
+//  2. Directory <stem>/ containing a <stem>.gdi (Dreamcast output).
+//
+// Case-insensitive.
 func findLikelyPayload(dir, stem string) (string, bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return "", false
 	}
 	stemLower := strings.ToLower(stem)
+	// First pass: Xbox file outputs.
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		name := e.Name()
-		lower := strings.ToLower(name)
+		lower := strings.ToLower(e.Name())
 		if !strings.HasPrefix(lower, stemLower) {
 			continue
 		}
 		if strings.HasSuffix(lower, ".iso") || strings.HasSuffix(lower, ".xiso") {
-			return filepath.Join(dir, name), true
+			return filepath.Join(dir, e.Name()), true
+		}
+	}
+	// Second pass: Dreamcast directory output.
+	for _, e := range entries {
+		if !e.IsDir() || strings.ToLower(e.Name()) != stemLower {
+			continue
+		}
+		gdi := filepath.Join(dir, e.Name(), stem+".gdi")
+		if _, err := os.Stat(gdi); err == nil {
+			return gdi, true
+		}
+		// Accept any .gdi inside (name might differ slightly from stem).
+		inner, _ := os.ReadDir(filepath.Join(dir, e.Name()))
+		for _, f := range inner {
+			if strings.HasSuffix(strings.ToLower(f.Name()), ".gdi") {
+				return filepath.Join(dir, e.Name(), f.Name()), true
+			}
 		}
 	}
 	return "", false

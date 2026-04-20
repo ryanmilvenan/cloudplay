@@ -377,12 +377,15 @@ export const init = () => {
             toggle();
             const inp = inputEl();
             if (!inp) return;
-            // Refocus the input so the user can keep typing without a click.
-            inp.focus();
             // Re-fire input so gameList.applyQuery re-evaluates under
             // the new mode — toggling from AI→fuzzy with text in the
             // bar should show fuzzy matches immediately; fuzzy→AI should
-            // clear the dropdown.
+            // clear the dropdown. We intentionally don't call inp.focus()
+            // here: on mobile Safari, a synthetic focus immediately after
+            // a button tap gets suppressed by the browser's "no
+            // programmatic keyboard" rule, which can also shake loose
+            // the user's own focus intent on subsequent taps. If the user
+            // wants the keyboard back up, they tap the search bar.
             inp.dispatchEvent(new Event('input', {bubbles: true}));
         });
     }

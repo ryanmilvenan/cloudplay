@@ -92,47 +92,67 @@ html, body {
 }
 
 /* ── Search-first game select ──
-   The flat grid is gone. A single input drives everything: typing
-   filters the dropdown live; pressing Enter in AI mode hands the query
-   to the conversational agent (see web/js/aiSearch.js).
+   A single input drives everything. Layout is a three-row grid keyed
+   on 100dvh (dynamic viewport height), so when an on-screen keyboard
+   appears on mobile the grid reflows cleanly — no JS resize math, no
+   absolute positioning, no padding-top:vh tricks that used to shift
+   the input out from under the user's finger mid-tap.
 
-   Layout:
+   Rows:
      ┌──────────────────────────────────────────┐
-     │                                          │
-     │   [AI breath — large, top third]         │   ← absolute, top:0 h:33vh
+     │                                          │ 33dvh
+     │   [AI breath — cinematic headline]       │  (row 1)
      │                                          │
      ├──────────────────────────────────────────┤
-     │   [search bar] + 🤖                      │   ← at ~33vh from top
-     │   ┌──────────────────────────────────┐   │
-     │   │ fuzzy results OR ai chain         │   ← below bar, flows down,
-     │   │ (newest at top, oldest at bottom) │     each turn dims as it
-     │   └──────────────────────────────────┘   │     sinks toward the floor
+     │   [label][search input] [🤖 toggle]      │  auto (row 2)
+     ├──────────────────────────────────────────┤
+     │   [fuzzy results OR AI chain]            │
+     │   (newest at top, older dims below)      │ 1fr  (row 3)
      │                                          │
      └──────────────────────────────────────────┘
  */
 
-#game-list-screen { position: relative; }
+#game-list-screen {
+    position: relative;
+    height: 100dvh;              /* dvh tracks the keyboard-reduced viewport */
+    overflow: hidden;            /* row 3 handles its own scrolling */
+}
 
 .game-select__stage {
     width: 100%;
     max-width: 760px;
+    height: 100%;
     margin: 0 auto;
-    padding: 34vh 16px 40px;   /* search bar lives at 33% down from top */
+    padding: 0 16px 16px;
     box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
+    display: grid;
+    grid-template-rows: 33dvh auto 1fr;
+    align-items: start;
     min-height: 0;
 }
 
-.game-select__searchwrap {
+.game-select__searchrow {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 4px 6px 4px 18px;
+    width: 100%;
+    padding: 6px 0;
+}
+
+/* The <label> wraps the input so tapping anywhere in the padded box
+   focuses the input via native browser behaviour (no JS). Critical for
+   mobile: iOS cancels focus attempts triggered by JS if the element
+   layout shifts between touchstart and touchend, so we avoid both
+   synthetic focus calls and resize-driven layout shifts. */
+.game-select__searchwrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    padding: 4px 18px;
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 14px;
+    cursor: text;
     transition: border-color 0.2s, background 0.2s;
 }
 .game-select__searchwrap:focus-within {
@@ -178,13 +198,9 @@ html, body {
 
 .game-select__results {
     list-style: none;
-    max-height: 55vh;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: visible;           /* parent .game-select__bottom scrolls */
     display: none;
     flex-direction: column;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255,255,255,0.1) transparent;
     transition: opacity 0.35s;
 }
 .game-select__results.has-results { display: flex; }
@@ -297,11 +313,14 @@ html, body {
 .ai-chain__info svg { display: inline-block; }
 
 /* Breath-side info affordance — a quiet "what did the agent see"
-   dot anchored just below the top-third breath region. Pointer-events
-   are on (unlike the breath itself) so it's actually clickable. */
+   dot anchored just below the top-third breath region. Positioned
+   against #game-list-screen (which is position: relative), using dvh
+   so it tracks the breath's actual on-screen bottom when the mobile
+   keyboard changes the viewport. Pointer-events are on (unlike the
+   breath itself) so it's actually clickable. */
 .ai-breath-info {
     position: absolute;
-    top: calc(33vh - 28px);
+    top: calc(33dvh - 28px);
     right: 20px;
     width: 30px; height: 30px;
     padding: 0;
@@ -458,18 +477,15 @@ html, body {
     font-size: 10px;
 }
 
-/* AI breath — the voice of god speaking to you. Occupies the top
-   third of the screen, not pinned to any other element. Emerges
-   slowly from darkness (2s ease-in fade), doesn't slide or move,
-   just surfaces into existence. Fades out a little faster when the
-   next turn arrives. Large light-weight typography with a faint
-   cool halo so it feels like a thought rather than a notification. */
+/* AI breath — the voice of god speaking to you. Lives in grid row 1
+   of the stage (33dvh tall), not absolutely positioned — so it can't
+   overlap the search row and can't interfere with input focus. It
+   emerges slowly from darkness (2s ease-in fade) and doesn't move.
+   Large light-weight typography with a faint cool halo so it feels
+   like a thought rather than a notification. */
 .ai-breath {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 33vh;
+    width: 100%;
+    height: 100%;
     margin: 0;
     padding: 0 8%;
     box-sizing: border-box;
@@ -489,6 +505,20 @@ html, body {
 }
 .ai-breath.is-visible { opacity: 1; }
 
+/* Bottom row: stacks results (fuzzy mode) above chain (AI mode).
+   Only one has content at a time in practice. Scrolls when the list
+   grows past the viewport. */
+.game-select__bottom {
+    width: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+
 /* When the breath is on-screen, dim the fuzzy list so the AI moment
    has visual primacy without losing the sense that the library is
    still under our feet. */
@@ -496,47 +526,37 @@ html, body {
     opacity: 0.18;
 }
 
-/* Mobile portrait — keep the same voice-of-god split: breath lives in
-   the top third, search bar sits at 34vh, chain + results flow into the
-   bottom two-thirds. The old breakpoint collapsed the top pad and
-   stacked everything together; this restores the cinematic layout at
-   phone scale.
-   Font-size stays at 16px — iOS Safari auto-zooms on focus for any
-   input smaller than that, which then traps the viewport mid-zoom. */
+/* Mobile portrait — same voice-of-god split as desktop, just at phone
+   scale. Font-size stays at 16px because iOS Safari auto-zooms on
+   focus for any input smaller than that, which then traps the
+   viewport mid-zoom. */
 @media (max-width: 640px) and (orientation: portrait) {
-    .game-select__stage { padding: 34vh 12px 28px; gap: 12px; }
+    .game-select__stage { padding: 0 12px 12px; }
     .game-select__input { font-size: 16px; padding: 12px 0; }
     .game-select__result { padding: 10px 14px; }
     .game-select__result.is-selected { padding-left: 11px; }
-    .ai-breath {
-        font-size: clamp(18px, 4.6vw, 28px);
-        padding: 0 6%;
-    }
-    .ai-breath-info { top: calc(33vh - 26px); right: 12px; }
-    /* Cover art scales down slightly — density matters more than card size
-       when the dropdown is fighting an on-screen keyboard. */
+    .ai-breath { font-size: clamp(18px, 4.6vw, 28px); padding: 0 6%; }
+    .ai-breath-info { right: 12px; }
     .game-select__result-cover,
     .ai-retrieved-panel__cover { width: 34px; height: 48px; }
     .ai-retrieved-panel__box { width: min(96vw, 520px); }
 }
 
 /* Mobile landscape — phones have almost no vertical room in landscape
-   (375 × 667 becomes 667 × 375). Using 34vh top pad here leaves only
-   ~250 px for the input + chain, which the on-screen keyboard then
-   eats entirely. Compress the top breath region and tighten the
-   search-bar padding so the input remains visible above the keyboard. */
+   (375 × 667 becomes 667 × 375). Compress row 1 (breath) to 24dvh so
+   the input stays visible above the on-screen keyboard. */
 @media (max-height: 500px) and (orientation: landscape) {
-    .game-select__stage { padding: 26vh 14px 16px; gap: 8px; max-width: 620px; }
+    .game-select__stage {
+        grid-template-rows: 24dvh auto 1fr;
+        padding: 0 14px 12px;
+        max-width: 620px;
+    }
     .game-select__input { font-size: 16px; padding: 9px 0; }
-    .game-select__searchwrap { padding: 2px 6px 2px 14px; }
+    .game-select__searchwrap { padding: 2px 14px; }
     .game-select__ai-toggle { width: 34px; height: 34px; }
     .game-select__result { padding: 8px 12px; }
-    .ai-breath {
-        height: 24vh;
-        font-size: clamp(15px, 2.8vw, 22px);
-        padding: 0 8%;
-    }
-    .ai-breath-info { top: calc(24vh - 22px); right: 14px; width: 26px; height: 26px; }
+    .ai-breath { font-size: clamp(15px, 2.8vw, 22px); padding: 0 8%; }
+    .ai-breath-info { top: calc(24dvh - 22px); right: 14px; width: 26px; height: 26px; }
     .ai-chain { font-size: 12px; }
     .game-select__result-cover,
     .ai-retrieved-panel__cover { width: 30px; height: 42px; }

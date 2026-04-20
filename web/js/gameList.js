@@ -1,308 +1,262 @@
 /**
- * Search-first game select UI — the flat grid that used to render every
- * game is gone. In its place: a single search input that fuzzy-filters
- * the library live as you type, a grayed AI turn chain and a breath
- * line above/below that bar, and a dropdown of matching results.
+ * Game-select screen (search-first, AI-augmented).
  *
- * External surface preserved for wiring.js, session.js, lifecycle.js:
- *   set(games)          — populate library from LibNewGameList broadcast
- *   show() / hide()     — screen visibility
- *   render()            — re-render current filter
- *   scroll(dir)         — gamepad axis / arrow-key navigation through results
- *   select(index)       — external selection (used rarely; still kept)
- *   disable()           — stop responding (called on start)
- *   onStart = fn        — launch callback
- *   selected            — title of selected game (CDP driver reads this)
- *   selectedGame        — full game metadata object (session.js reads this)
- *   isEmpty             — pre-populated? (loading-spinner state in lifecycle)
- *   findByTitle(title)  — room-id → game object lookup
+ * Clean rewrite of the cloudretro-inherited game list. The previous
+ * implementation fought with mobile focus because the layout was driven
+ * by JS-resized viewport math, absolute-positioned siblings overlapping
+ * the search row, and synthetic input events dispatched from click
+ * handlers. This module strips all of that out.
  *
- * Phase 1 scope: fuzzy only. AI toggle and breath UI live in
- * aiSearch.js; that module owns Enter-in-AI-mode routing. Phase 4
- * replaces aiSearch's stub ask() with the live LLM endpoint.
+ * Design:
+ *   - Layout is 100% CSS grid keyed on 100dvh. When the on-screen
+ *     keyboard appears and the dynamic viewport shrinks, the grid
+ *     reflows naturally — nothing in here cares. No `resize` listener,
+ *     no viewport-locking of #gamebody, no padding-top: vh hack.
+ *   - Input is wrapped in a native `<label>`. Tapping anywhere in the
+ *     search row focuses the input through native browser behaviour —
+ *     no JS tap-to-focus stack, no pointerdown handlers, no synthetic
+ *     events. This is what iOS Safari needs to keep the keyboard up.
+ *   - State is one object, render is one function reading that state.
+ *     Events mutate state and call render(). No independent DOM paths.
+ *   - Search is fuzzy (instant) blended with semantic (debounced) via
+ *     reciprocal-rank fusion — unchanged from the prior version, just
+ *     lifted out of the DOM/lifecycle code.
+ *   - Old file preserved at web/js/gameList.legacy.js for reference
+ *     during the stabilization window; not imported anywhere.
+ *
+ * Export surface preserved for wiring.js / session.js / lifecycle.js:
+ *   set, show, hide, render, scroll, select, disable,
+ *   onStart (setter), selected (getter), selectedGame (getter),
+ *   isEmpty (getter), findByTitle
  */
 
-import { filter as fuzzyFilter, isNaturalLanguageQuery } from './fuzzy.js?v=__V__';
-import { ask as aiAsk, getMode as aiGetMode, init as aiInit, clearConversation, onUserTyping as aiOnUserTyping, setLaunchHandler as aiSetLaunchHandler } from './aiSearch.js?v=__V__';
+import { filter as fuzzyFilter } from './fuzzy.js?v=__V__';
+import {
+    ask as aiAsk,
+    getMode as aiGetMode,
+    init as aiInit,
+    clearConversation as aiClearConversation,
+    onUserTyping as aiOnUserTyping,
+    setLaunchHandler as aiSetLaunchHandler,
+} from './aiSearch.js?v=__V__';
 import { semanticSearch } from './network/semanticSearch.js?v=__V__';
 
+// ── DOM ────────────────────────────────────────────────────────────────
 const screenEl = document.getElementById('game-list-screen');
 const inputEl = document.getElementById('game-select-input');
 const resultsEl = document.getElementById('game-select-results');
 
-let library = [];         // full list, alphabetical
-let filtered = [];        // current filter result (library if query empty)
-let selectedIndex = 0;    // index into `filtered`
-let onStart = () => {};
-let disabled = false;
-let enabled = false;      // input + key wiring bound?
-
+// ── Config ─────────────────────────────────────────────────────────────
 const SYSTEM_LABELS = {
-    gc: 'GameCube',
-    wii: 'Wii',
-    dreamcast: 'Dreamcast',
-    snes: 'SNES',
-    nes: 'NES',
-    gba: 'Game Boy Advance',
-    pcsx: 'PlayStation',
-    ps2: 'PlayStation 2',
-    n64: 'Nintendo 64',
-    mame: 'Arcade',
-    dos: 'DOS',
-    xbox: 'Xbox',
+    gc: 'GameCube', wii: 'Wii', dreamcast: 'Dreamcast',
+    snes: 'SNES', nes: 'NES', gba: 'Game Boy Advance',
+    pcsx: 'PlayStation', ps2: 'PlayStation 2', n64: 'Nintendo 64',
+    mame: 'Arcade', dos: 'DOS', xbox: 'Xbox',
 };
 const systemLabel = (s = '') => SYSTEM_LABELS[s] || (s ? s.toUpperCase() : 'Other');
 
-const DEFAULT_TOP_WHEN_EMPTY = 0; // empty query shows nothing; placeholder guides user
-
-const renderResults = () => {
-    if (!resultsEl) return;
-    resultsEl.innerHTML = '';
-    if (filtered.length === 0) {
-        // No results yet — the input's placeholder carries the UX.
-        resultsEl.classList.remove('has-results');
-        return;
-    }
-    resultsEl.classList.add('has-results');
-    filtered.forEach((game, i) => {
-        const el = document.createElement('div');
-        el.className = 'game-select__result' + (i === selectedIndex ? ' is-selected' : '');
-        el.dataset.index = String(i);
-        el.setAttribute('role', 'option');
-        el.setAttribute('aria-selected', String(i === selectedIndex));
-        // Cover art comes from IGDB enrichment. When missing we render a
-        // placeholder block of the same size so the rows don't jump as
-        // backfill completes and covers appear mid-session.
-        const cover = game.cover_url
-            ? `<img class="game-select__result-cover" src="${escapeHtml(game.cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">`
-            : `<div class="game-select__result-cover game-select__result-cover--empty"></div>`;
-        el.innerHTML =
-            cover +
-            `<div class="game-select__result-body">` +
-              `<div class="game-select__result-title">${escapeHtml(game.alias || game.title)}</div>` +
-              `<div class="game-select__result-system">${escapeHtml(systemLabel(game.system))}</div>` +
-            `</div>`;
-        el.addEventListener('click', () => {
-            selectedIndex = i;
-            renderResults();
-            onStart();
-        });
-        resultsEl.appendChild(el);
-    });
-    scrollSelectedIntoView();
-};
-
-const scrollSelectedIntoView = () => {
-    const el = resultsEl?.querySelector('.game-select__result.is-selected');
-    if (el && typeof el.scrollIntoView === 'function') {
-        el.scrollIntoView({ block: 'nearest' });
-    }
-};
-
-// applyQuery runs both the local fuzzy filter (instant, synchronous)
-// and a debounced semantic-search fetch (async, 250 ms after last
-// keystroke). The fuzzy hits render immediately so the UI always
-// feels responsive; semantic hits merge in as they arrive via
-// reciprocal-rank fusion, boosting titles that both paths rank well
-// and surfacing titles that only semantic found (e.g. the user types
-// "soccer" and we pull in FIFA / Winning Eleven even though the
-// token "soccer" appears in none of their file names).
-let semanticTimer = null;
-let semanticGeneration = 0;
 const SEMANTIC_DEBOUNCE_MS = 250;
 const SEMANTIC_TOP = 20;
+const RRF_K = 60;
+const SCROLL_INTERVAL_MS = 180;
+const MAX_RESULTS = 50;
 
-const applyQuery = (q) => {
-    const query = (q || '').trim();
-    if (!query) {
-        filtered = library.slice(0, DEFAULT_TOP_WHEN_EMPTY);
-        selectedIndex = 0;
-        renderResults();
-        return;
-    }
-    // AI mode: the search bar is a prompt, not a filter. Suppressing
-    // the dropdown while typing keeps the cinematic breath panel clean;
-    // toggle the sparkle off to search-as-filter.
-    if (aiGetMode()) {
-        filtered = [];
-        selectedIndex = 0;
-        renderResults();
-        clearTimeout(semanticTimer);
-        return;
-    }
-    // Fuzzy hits — instant.
-    const fuzzy = fuzzyFilter(library, query, (g) => `${g.alias || ''} ${g.title}`).slice(0, 50);
-    filtered = fuzzy;
-    selectedIndex = 0;
-    renderResults();
-
-    // Semantic hits — debounced. Stale requests are dropped by
-    // comparing generation counters; a slow response to "fifa" won't
-    // clobber a fresh response to "fifa 0".
-    clearTimeout(semanticTimer);
-    const gen = ++semanticGeneration;
-    semanticTimer = setTimeout(async () => {
-        const hits = await semanticSearch(query, SEMANTIC_TOP);
-        if (gen !== semanticGeneration || !hits.length) return;
-        filtered = blendFuzzyAndSemantic(fuzzy, hits, query);
-        renderResults();
-    }, SEMANTIC_DEBOUNCE_MS);
+// ── State ──────────────────────────────────────────────────────────────
+const state = {
+    library: [],
+    filtered: [],
+    selected: 0,
+    disabled: false,
+    onStart: () => {},
 };
 
-// blendFuzzyAndSemantic merges the two result sets via reciprocal-rank
-// fusion (RRF): score(game) = sum over lists of 1/(k + rank). k=60 is
-// the canonical TREC default; it down-weights tail ranks so a list of
-// 50 fuzzy hits doesn't drown out 10 strong semantic hits.
-const RRF_K = 60;
-const blendFuzzyAndSemantic = (fuzzy, semantic, query) => {
-    const byKey = new Map(); // path|system -> {game, score}
-    const addOrUpdate = (game, rrf) => {
-        const key = `${game.path}|${game.system}`;
-        const cur = byKey.get(key);
+// ── Rendering ──────────────────────────────────────────────────────────
+const escapeHtml = (s = '') => String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+})[c]);
+
+function renderResults() {
+    if (!resultsEl) return;
+    const { filtered, selected } = state;
+    resultsEl.classList.toggle('has-results', filtered.length > 0);
+    resultsEl.innerHTML = filtered.map((game, i) => {
+        const isSel = i === selected;
+        const cover = game.cover_url
+            ? `<img class="game-select__result-cover" src="${escapeHtml(game.cover_url)}" alt="" loading="lazy" onerror="this.remove()">`
+            : `<div class="game-select__result-cover game-select__result-cover--empty"></div>`;
+        return `<div class="game-select__result${isSel ? ' is-selected' : ''}" data-index="${i}" role="option" aria-selected="${isSel}">`
+             + cover
+             + `<div class="game-select__result-body">`
+             +   `<div class="game-select__result-title">${escapeHtml(game.alias || game.title)}</div>`
+             +   `<div class="game-select__result-system">${escapeHtml(systemLabel(game.system))}</div>`
+             + `</div></div>`;
+    }).join('');
+    // Keep the selected row visible when the keyboard/gamepad walks off-screen.
+    resultsEl.querySelector('.game-select__result.is-selected')
+        ?.scrollIntoView({ block: 'nearest' });
+}
+
+// ── Search (fuzzy + semantic RRF blend) ────────────────────────────────
+let semanticTimer = null;
+let semanticGen = 0;
+
+function applyQuery(raw) {
+    const query = (raw || '').trim();
+    clearTimeout(semanticTimer);
+
+    // Empty bar, or AI mode: dropdown stays closed. AI mode turns the
+    // bar into a prompt, not a filter — the chain/breath own the visual
+    // feedback while typing.
+    if (!query || aiGetMode()) {
+        state.filtered = [];
+        state.selected = 0;
+        renderResults();
+        return;
+    }
+
+    // Fuzzy first — purely local, instant.
+    const fuzzy = fuzzyFilter(
+        state.library, query,
+        (g) => `${g.alias || ''} ${g.title}`,
+    ).slice(0, MAX_RESULTS);
+    state.filtered = fuzzy;
+    state.selected = 0;
+    renderResults();
+
+    // Semantic in the background, blended in on arrival.
+    const gen = ++semanticGen;
+    semanticTimer = setTimeout(async () => {
+        const hits = await semanticSearch(query, SEMANTIC_TOP);
+        if (gen !== semanticGen || !hits.length) return;
+        state.filtered = blend(fuzzy, hits);
+        renderResults();
+    }, SEMANTIC_DEBOUNCE_MS);
+}
+
+// Reciprocal-rank fusion: each list contributes 1/(RRF_K + rank) per
+// game, scores sum across lists, top-N wins. k=60 is the TREC default.
+function blend(fuzzy, semantic) {
+    const byKey = new Map();
+    const add = (game, rrf) => {
+        const k = `${game.path}|${game.system}`;
+        const cur = byKey.get(k);
         if (cur) cur.score += rrf;
-        else byKey.set(key, { game, score: rrf });
+        else byKey.set(k, { game, score: rrf });
     };
-    fuzzy.forEach((g, i) => addOrUpdate(g, 1 / (RRF_K + i)));
-    // semantic hits are {game_path, system, score} — look up the full
-    // game object from the library by (path, system).
-    const libByKey = new Map(library.map(g => [`${g.path}|${g.system}`, g]));
+    fuzzy.forEach((g, i) => add(g, 1 / (RRF_K + i)));
+    const libByKey = new Map(state.library.map(g => [`${g.path}|${g.system}`, g]));
     semantic.forEach((h, i) => {
-        const game = libByKey.get(`${h.game_path}|${h.system}`);
-        if (!game) return;
-        addOrUpdate(game, 1 / (RRF_K + i));
+        const g = libByKey.get(`${h.game_path}|${h.system}`);
+        if (g) add(g, 1 / (RRF_K + i));
     });
     return [...byKey.values()]
         .sort((a, b) => b.score - a.score)
-        .slice(0, 50)
+        .slice(0, MAX_RESULTS)
         .map(e => e.game);
-};
+}
 
-const bindOnce = () => {
-    if (enabled) return;
-    enabled = true;
+// ── Navigation + launch ────────────────────────────────────────────────
+function stepSelection(dir) {
+    if (state.filtered.length === 0) return;
+    const n = state.filtered.length;
+    state.selected = ((state.selected + dir) % n + n) % n;
+    renderResults();
+}
+
+function launchSelected() {
+    if (state.filtered.length === 0) return;
+    aiClearConversation();
+    state.onStart();
+}
+
+function handleEnter() {
+    const q = inputEl.value;
+    if (aiGetMode()) {
+        // In AI mode Enter hands the query to the conversational agent.
+        // We clear the bar so the breath has the stage; the chain will
+        // echo the query below.
+        inputEl.value = '';
+        applyQuery('');
+        aiAsk(q);
+        return;
+    }
+    launchSelected();
+}
+
+// ── Mount ──────────────────────────────────────────────────────────────
+let mounted = false;
+function mount() {
+    if (mounted || !inputEl) return;
+    mounted = true;
+
     aiInit();
-    // When the conversational agent resolves a `launch` action, find
-    // the matching library entry, select it, and trigger the normal
-    // start-game path. If the path isn't in the library anymore (e.g.
-    // the user ran rsync recently and a ROM is gone), silently no-op
-    // — the breath text already reads like a confirmation so the user
-    // sees feedback even without a transition.
     aiSetLaunchHandler((action) => {
         const key = `${action.game_path}|${action.system}`;
-        const idx = library.findIndex(g => `${g.path}|${g.system}` === key);
+        const idx = state.library.findIndex(g => `${g.path}|${g.system}` === key);
         if (idx < 0) return;
-        filtered = [library[idx]];
-        selectedIndex = 0;
+        state.filtered = [state.library[idx]];
+        state.selected = 0;
         renderResults();
-        onStart();
+        state.onStart();
     });
-    if (!inputEl) return;
-    // Tap-anywhere-on-the-search-bar focusing. On mobile the padded
-    // wrap around the input is a much bigger tap target than the input
-    // itself; without this, a mis-aimed tap lands on the wrap's padding
-    // and iOS/Android doesn't summon the keyboard because no input got
-    // focused. We also explicitly call .focus() inside a same-tick
-    // pointer handler, which is what iOS requires to raise the keyboard.
-    const searchWrap = inputEl.closest('.game-select__searchwrap');
-    if (searchWrap) {
-        const focusInput = (e) => {
-            // Avoid stealing focus when the user taps the AI toggle
-            // sitting inside the same wrap.
-            if (e.target.closest('.game-select__ai-toggle')) return;
-            if (document.activeElement !== inputEl) inputEl.focus();
-        };
-        searchWrap.addEventListener('pointerdown', focusInput);
-        searchWrap.addEventListener('click', focusInput);
-    }
+
     inputEl.addEventListener('input', (e) => {
-        if (disabled) return;
-        // As soon as the user edits the bar, dismiss the big top-third
-        // breath — the AI response (if any) graduates into the decaying
-        // chain where recent memories live, so nothing is lost visually.
+        if (state.disabled) return;
+        // First keystroke dismisses the big breath. Previous AI response
+        // (if any) graduates into the decaying chain so it's still
+        // reachable via the info tooltip.
         aiOnUserTyping();
         applyQuery(e.target.value);
     });
+
     inputEl.addEventListener('keydown', (e) => {
-        if (disabled) return;
+        if (state.disabled) return;
         if (e.key === 'ArrowDown') { e.preventDefault(); stepSelection(1); return; }
         if (e.key === 'ArrowUp')   { e.preventDefault(); stepSelection(-1); return; }
         if (e.key === 'Enter')     { e.preventDefault(); handleEnter(); }
     });
-};
 
-const stepSelection = (dir) => {
-    if (filtered.length === 0) return;
-    const n = filtered.length;
-    selectedIndex = ((selectedIndex + dir) % n + n) % n;
-    renderResults();
-};
+    resultsEl?.addEventListener('click', (e) => {
+        if (state.disabled) return;
+        const row = e.target.closest('.game-select__result');
+        if (!row) return;
+        const i = Number(row.dataset.index);
+        if (!Number.isFinite(i)) return;
+        state.selected = i;
+        renderResults();
+        launchSelected();
+    });
+}
 
-const handleEnter = () => {
-    const q = inputEl.value;
-    const aiOn = aiGetMode();
-    // AI mode takes priority when ON: any Enter routes through the
-    // conversational agent (Phase 1 renders a stub). Natural-language
-    // heuristic may be consulted in Phase 4 to short-circuit obvious
-    // direct queries, but right now we hand everything to the agent.
-    if (aiOn) {
-        // Fuzzy still applies live while typing; pressing Enter is the
-        // user saying "interpret this as a sentence, not a filter".
-        inputEl.value = '';
-        applyQuery('');
-        aiAsk(q);
-        // Intentionally referenced so bundlers / IDE-grepping know the
-        // heuristic is used by the wiring even when we don't branch on
-        // it here. Phase 4 will use its return value.
-        void isNaturalLanguageQuery(q);
-        return;
-    }
-    // Fuzzy mode: Enter launches the currently-selected match (top hit
-    // if user didn't navigate).
-    if (filtered.length === 0) return;
-    clearConversation(); // if any prior AI turns sit in the chain, drop them
-    onStart();
-};
-
-const escapeHtml = (s = '') =>
-    s.replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    })[c]);
-
-// Gamepad/keyboard axis driver — lifecycle.js calls scroll(±1) to step
-// and scroll(0) to stop. We fire one step immediately, then an interval
-// mirrors the old behavior for held inputs.
+// ── Gamepad/arrow-key held-scroll ──────────────────────────────────────
 let scrollTimer = null;
-const SCROLL_INTERVAL_MS = 180;
 
+// ── External API (shape preserved for existing callers) ────────────────
 export const gameList = {
     set(games = []) {
-        // Stable alphabetic base.
-        library = [...games].sort((a, b) =>
+        state.library = [...games].sort((a, b) =>
             (a.title || '').toLowerCase() > (b.title || '').toLowerCase() ? 1 : -1
         );
         screenEl?.classList.remove('loading');
-        bindOnce();
-        // Re-apply whatever the user currently has typed — new library
-        // might surface matches that weren't there before (IGDB Phase 2
-        // delta, 7z hydration deleting an archive, etc.).
+        mount();
+        // Re-filter in case the user has been typing while the library
+        // streamed in (e.g. IGDB Phase 2 delta enrichment).
         if (inputEl) applyQuery(inputEl.value);
     },
     get selected() {
-        return filtered[selectedIndex]?.title || '';
+        return state.filtered[state.selected]?.title || '';
     },
     get selectedGame() {
-        return filtered[selectedIndex] || null;
+        return state.filtered[state.selected] || null;
     },
     show() {
         if (screenEl) screenEl.style.display = '';
-        bindOnce();
+        mount();
     },
     hide() {
         if (screenEl) screenEl.style.display = 'none';
     },
-    render() {
-        renderResults();
-    },
+    render() { renderResults(); },
     scroll(direction) {
         clearInterval(scrollTimer);
         if (direction === 0) return;
@@ -310,20 +264,20 @@ export const gameList = {
         scrollTimer = setInterval(() => stepSelection(direction), SCROLL_INTERVAL_MS);
     },
     select(index) {
-        if (filtered.length === 0) return;
-        const n = filtered.length;
-        selectedIndex = ((index % n) + n) % n;
+        if (state.filtered.length === 0) return;
+        const n = state.filtered.length;
+        state.selected = ((index % n) + n) % n;
         renderResults();
     },
     disable() {
-        disabled = true;
+        state.disabled = true;
         clearInterval(scrollTimer);
     },
-    set onStart(fn) { onStart = fn; },
-    get isEmpty() { return library.length === 0; },
+    set onStart(fn) { state.onStart = fn; },
+    get isEmpty() { return state.library.length === 0; },
     findByTitle(title) {
         if (!title) return null;
         const lower = title.toLowerCase();
-        return library.find(g => (g.title || '').toLowerCase() === lower) || null;
+        return state.library.find(g => (g.title || '').toLowerCase() === lower) || null;
     },
 };

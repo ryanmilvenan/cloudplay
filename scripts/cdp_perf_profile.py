@@ -183,12 +183,21 @@ def force_play_muted(tab):
 def run(game, seconds, out_path, poll_hz, reload):
     print(f"[perf] connecting to CDP at {CDP}", flush=True)
     tab = Tab(HOST)
+    # Chrome throttles hidden tabs aggressively (RAF 1fps, video decode
+    # throttling, timers clamped to ≥1s). That inflates the "packet
+    # loss" and "freeze" metrics into artifact if we don't foreground
+    # the tab first. Page.bringToFront puts the CDP tab into a visible
+    # state without needing a real user gesture.
+    tab.send("Page.enable")
+    front = tab.send("Page.bringToFront")
+    if front.get("error"):
+        print(f"[perf] bringToFront warning: {front['error']}", flush=True)
     if reload:
         print("[perf] reloading tab for clean state", flush=True)
-        tab.send("Page.enable")
         tab.send("Page.reload", {"ignoreCache": True})
         # Wait for the library broadcast and menu render.
         time.sleep(6)
+        tab.send("Page.bringToFront")  # reloaded tab may have lost foreground
     print(f"[perf] clicking '{game}'", flush=True)
     click_res = click_game(tab, game)
     print(f"[perf] click_game → {click_res}", flush=True)

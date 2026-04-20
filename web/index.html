@@ -280,7 +280,21 @@
 <script>
 // Force gamebody to actual screen size before anything else loads
 (function() {
+    // Skip the viewport lock while a text input is focused. On iOS
+    // and Chrome-Android, `window.innerHeight` shrinks when the
+    // on-screen keyboard appears — if we resize #gamebody to match,
+    // the layout shifts under the user's finger mid-tap and the
+    // browser cancels the focus (and dismisses the keyboard it was
+    // about to show). Let the viewport reflow naturally while the
+    // keyboard is up; re-lock on the next non-input resize.
+    function isTextInputFocused() {
+        var ae = document.activeElement;
+        if (!ae) return false;
+        if (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA') return true;
+        return ae.isContentEditable === true;
+    }
     function fix() {
+        if (isTextInputFocused()) return;
         var gb = document.getElementById('gamebody');
         if (gb) {
             gb.style.width = window.innerWidth + 'px';

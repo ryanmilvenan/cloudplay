@@ -379,3 +379,16 @@ search:
   embedModel: embeddings
   batchSize: 32
   requestsPerSecond: 4
+
+# Phase-4 conversational agent (gemma4:e4b via local Ollama). Receives
+# natural-language queries from the browser's search-bar Enter path,
+# runs retrieval against the Phase-3 vector index, and emits one of
+# four actions (ask / recommend / launch / say). Disabled by default;
+# when off the frontend stays on the Phase-1 "agent offline" stub.
+# Requires search.enabled=true to be useful.
+agent:
+  enabled: false
+  ollamaUrl: http://localhost:11434
+  model: gemma4:e4b
+  timeoutMs: 8000
+  topK: 10

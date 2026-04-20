@@ -23,6 +23,7 @@ type WorkerConfig struct {
 	Xemu      XemuConfig
 	Igdb      IgdbConfig
 	Search    SemanticSearchConfig `yaml:"search"`
+	Agent     AgentConfig          `yaml:"agent"`
 }
 
 type Storage struct {

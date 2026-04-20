@@ -117,10 +117,21 @@ const showBreath = (text) => {
 // double-printing the same line.
 let liveAi = null;
 
-// ask(query): Phase 1 stub. Moves any live AI response into the chain,
-// adds the new human turn to the chain, runs a fake "think" delay,
-// then breathes a placeholder line that becomes the new liveAi.
-// Phase 4 replaces the body with a call to /v1/agent/turn.
+// onLaunch: set by wiring.js so the agent's `launch` action can hand
+// back to the normal start-game flow. Set after init().
+let onLaunch = null;
+export const setLaunchHandler = (fn) => { onLaunch = fn; };
+
+// Conversation history mirrors what the backend agent needs in its
+// prompt. Trimmed to the last N turns so the prompt stays cheap; the
+// gradient chain in the UI shows the most recent four.
+const MAX_HISTORY = 8;
+const history = []; // [{role:'user'|'agent', text}]
+
+// ask(query): Phase 4 — POST to /v1/agent/turn, interpret the
+// {action, text, ...} response, and animate accordingly. The
+// "voice of god" breath animation from Phase 1 is preserved; the
+// only change is the text source (the LLM instead of a stub).
 export const ask = async (query) => {
     if (!query || !query.trim()) return;
     // Previous AI response graduates from breath → chain.
@@ -129,15 +140,47 @@ export const ask = async (query) => {
         liveAi = null;
     }
     pushTurn('user', query);
-    // The previous breath fades out completely before the new one
-    // fades in — makes the screen feel like it inhales between turns
-    // rather than cutting mid-thought.
+    history.push({role: 'user', text: query});
+    trimHistory();
+    // Fade out the previous breath before the new one surfaces.
     showBreath(null);
-    await wait(900);
-    // Phase 1 placeholder. Phase 4 replaces with the LLM's response.
-    const placeholder = 'Agent offline (Phase 1 shell) — pick a game from the list.';
-    liveAi = placeholder;
-    showBreath(placeholder);
+    // "Thinking" gap — covers network + LLM latency with the same
+    // quiet inhale-between-turns feel as a no-op transition.
+    await wait(600);
+
+    let action;
+    try {
+        const resp = await fetch('/v1/agent/turn', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({query, history: history.slice(0, -1)}),
+        });
+        action = await resp.json();
+    } catch (e) {
+        action = {action: 'say', text: 'I couldn\u2019t reach the assistant — try picking from the list.'};
+    }
+
+    const text = (action && action.text) ? String(action.text) : '';
+    if (text) {
+        liveAi = text;
+        showBreath(text);
+        history.push({role: 'agent', text});
+        trimHistory();
+    }
+
+    // Launch action: after the breath shows briefly, kick the normal
+    // start-game flow. The breath stays visible across the transition
+    // — the game view replaces the menu so the overlay disappears
+    // naturally when the stream takes over.
+    if (action && action.action === 'launch' && action.game_path && action.system) {
+        if (typeof onLaunch === 'function') {
+            setTimeout(() => onLaunch(action), 400);
+        }
+    }
+};
+
+const trimHistory = () => {
+    while (history.length > MAX_HISTORY) history.shift();
 };
 
 const wait = (ms) => new Promise(r => setTimeout(r, ms));

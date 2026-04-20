@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/giongto35/cloud-game/v3/pkg/api"
 	"github.com/giongto35/cloud-game/v3/pkg/config"
@@ -15,6 +16,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/libretro"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/cloud"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/agent"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/enricher"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/rcheevos"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/romcache"
@@ -152,6 +154,30 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 		go enr.Run(context.Background())
 	}
 
+	// Phase-4 conversational agent. Wires Ollama + retrieval into
+	// POST /v1/agent/turn. Requires Search + IGDB to be useful;
+	// deps are nil-tolerant so a mis-configured agent still serves
+	// a "say: can't help" reply rather than 5xx.
+	var agentHandler *agent.Handler
+	if conf.Agent.Enabled {
+		ollamaURL := conf.Agent.OllamaURL
+		if ollamaURL == "" {
+			ollamaURL = "http://localhost:11434"
+		}
+		model := conf.Agent.Model
+		if model == "" {
+			model = "gemma4:e4b"
+		}
+		timeout := time.Duration(conf.Agent.TimeoutMs) * time.Millisecond
+		ollama := agent.NewOllamaClient(ollamaURL, model, timeout)
+		var cache *enricher.Cache
+		if enr != nil {
+			cache = enr.CacheHandle()
+		}
+		agentHandler = agent.NewHandler(ollama, library, cache, searchIndex, searchEmbedder, conf.Agent.TopK, log)
+		log.Info().Str("model", model).Str("url", ollamaURL).Msg("[AGENT] armed")
+	}
+
 	h, err := httpx.NewServer(
 		conf.Worker.GetAddr(),
 		func(s *httpx.Server) httpx.Handler {
@@ -164,6 +190,10 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 			// config return 404, not a half-wired 500.
 			if searchIndex != nil && searchEmbedder != nil {
 				mux.Handle("/v1/search/semantic", search.NewHandler(searchEmbedder, searchIndex, log))
+			}
+			// Phase-4 conversational agent.
+			if agentHandler != nil {
+				mux.Handle("/v1/agent/turn", agentHandler)
 			}
 			return mux
 		},

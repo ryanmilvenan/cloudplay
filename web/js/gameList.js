@@ -23,7 +23,7 @@
  */
 
 import { filter as fuzzyFilter, isNaturalLanguageQuery } from './fuzzy.js?v=__V__';
-import { ask as aiAsk, getMode as aiGetMode, init as aiInit, clearConversation, onUserTyping as aiOnUserTyping } from './aiSearch.js?v=__V__';
+import { ask as aiAsk, getMode as aiGetMode, init as aiInit, clearConversation, onUserTyping as aiOnUserTyping, setLaunchHandler as aiSetLaunchHandler } from './aiSearch.js?v=__V__';
 import { semanticSearch } from './network/semanticSearch.js?v=__V__';
 
 const screenEl = document.getElementById('game-list-screen');
@@ -162,6 +162,21 @@ const bindOnce = () => {
     if (enabled) return;
     enabled = true;
     aiInit();
+    // When the conversational agent resolves a `launch` action, find
+    // the matching library entry, select it, and trigger the normal
+    // start-game path. If the path isn't in the library anymore (e.g.
+    // the user ran rsync recently and a ROM is gone), silently no-op
+    // — the breath text already reads like a confirmation so the user
+    // sees feedback even without a transition.
+    aiSetLaunchHandler((action) => {
+        const key = `${action.game_path}|${action.system}`;
+        const idx = library.findIndex(g => `${g.path}|${g.system}` === key);
+        if (idx < 0) return;
+        filtered = [library[idx]];
+        selectedIndex = 0;
+        renderResults();
+        onStart();
+    });
     if (!inputEl) return;
     inputEl.addEventListener('input', (e) => {
         if (disabled) return;

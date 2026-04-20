@@ -80,6 +80,16 @@ func (e *Enricher) AttachSemanticSearch(embedder *search.Embedder, index *search
 	e.index = index
 }
 
+// CacheHandle exposes the underlying Cache so other worker packages
+// (e.g. pkg/worker/agent) can look up enriched per-game metadata to
+// hydrate LLM prompts. Returns nil when the enricher isn't configured.
+func (e *Enricher) CacheHandle() *Cache {
+	if e == nil {
+		return nil
+	}
+	return e.cache
+}
+
 // LoadEmbeddingsFromCache streams every persisted embedding into the
 // in-memory index. Called once at worker startup after AttachSemanticSearch
 // so restarts don't re-embed the library.

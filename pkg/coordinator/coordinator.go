@@ -32,6 +32,9 @@ func New(conf config.CoordinatorConfig, log *logger.Logger) (*Coordinator, error
 		// Single-container deploy: worker is always on localhost:9000;
 		// multi-worker deploys will need a real load-balanced route.
 		mux.Handle("/v1/search/semantic", newSemanticSearchProxy(log))
+		// Phase-4 conversational agent shares the same reverse-proxy
+		// pattern — browser → coordinator → worker localhost:9000.
+		mux.Handle("/v1/agent/turn", newAgentProxy(log))
 		return mux
 	})
 	if err != nil {

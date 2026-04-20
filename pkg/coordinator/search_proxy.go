@@ -8,6 +8,20 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 )
 
+// newAgentProxy reverse-proxies /v1/agent/turn to the worker on
+// localhost:9000. Same shape as newSemanticSearchProxy; the worker
+// owns the model call + retrieval, the coordinator only exposes it.
+func newAgentProxy(log *logger.Logger) http.Handler {
+	target, _ := url.Parse("http://localhost:9000")
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Debug().Err(err).Msg("[coord] agent proxy error; worker may be down")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"action":"say","text":"The assistant is unavailable right now."}`))
+	}
+	return proxy
+}
+
 // newSemanticSearchProxy returns an http.Handler that reverse-proxies
 // /v1/search/semantic to the worker's HTTP server on localhost:9000.
 // Used by Phase-3 so the browser can reach the vector-search endpoint

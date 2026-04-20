@@ -156,6 +156,44 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 			goto commonStart
 		}
 
+		// Libretro path — hydrate archived ROMs synchronously before
+		// handing the path to the core. Dreamcast .7z archives contain
+		// a .gdi + track files; flycast reads the .gdi, not the 7z.
+		// Xbox's async hydration pattern (see startXemuRoom) isn't
+		// available here because libretro's app.Load is what sets the
+		// viewport dimensions that commonStart's StartGameResponse
+		// reports. In practice Dreamcast archives (200-900 MB LZMA)
+		// extract in under 10 s on the NFS mount, which fits inside
+		// the coordinator's 10 s RPC timeout. Xbox-style repack
+		// wouldn't — but Xbox doesn't land here, it's the xemu branch.
+		if romcache.NeedsHydration(game.Path) {
+			fullPath := game.FullPath(w.conf.Library.BasePath)
+			c.log.Info().Str("archive", game.Path).
+				Msg("[ROMCACHE] hydrating libretro ROM (sync)")
+			resolved, err := w.hyd.ResolveNoProgress(fullPath)
+			if err != nil {
+				c.log.Error().Err(err).Str("archive", game.Path).
+					Msg("[ROMCACHE] hydrate failed; closing room")
+				r.Close()
+				w.router.SetRoom(nil)
+				return api.EmptyPacket
+			}
+			if rel, relErr := filepath.Rel(w.conf.Library.BasePath, resolved); relErr == nil {
+				game.Path = rel
+			} else {
+				// Fall back to the absolute path — app.Load's FullPath
+				// join with "" base falls through to raw Path.
+				game.Path = resolved
+			}
+			// Refresh the extension so any ext-driven routing downstream
+			// sees the real payload type (e.g. .gdi instead of .7z).
+			if ext := filepath.Ext(resolved); len(ext) > 1 {
+				game.Type = ext[1:]
+			}
+			c.log.Info().Str("resolved", game.Path).
+				Msg("[ROMCACHE] hydration done; proceeding to app.Load")
+		}
+
 		// start the emulator
 		app := room.WithEmulator(w.mana.Get(caged.Libretro))
 		app.ReloadFrontend()

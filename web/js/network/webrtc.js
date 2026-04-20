@@ -258,6 +258,16 @@ export const webrtc = {
         if (!connected || !connection) return Promise.resolve();
         return await connection.getStats()
     },
+    // statsRaw — skips the `connected` guard so the CDP perf profiler
+    // can collect inbound-rtp stats even when the connection flag is
+    // stuck (Chrome's iceConnectionState occasionally transitions
+    // 'checking' → media-flowing without ever landing on 'connected',
+    // especially after an iceRestart). As long as `connection` is
+    // non-null we can call getStats() safely.
+    statsRaw: async () => {
+        if (!connection) return Promise.resolve();
+        return await connection.getStats()
+    },
     stop,
     set onData(fn) {
         onData = fn

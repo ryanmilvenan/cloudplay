@@ -70,9 +70,18 @@ const renderResults = () => {
         el.dataset.index = String(i);
         el.setAttribute('role', 'option');
         el.setAttribute('aria-selected', String(i === selectedIndex));
+        // Cover art comes from IGDB enrichment. When missing we render a
+        // placeholder block of the same size so the rows don't jump as
+        // backfill completes and covers appear mid-session.
+        const cover = game.cover_url
+            ? `<img class="game-select__result-cover" src="${escapeHtml(game.cover_url)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+            : `<div class="game-select__result-cover game-select__result-cover--empty"></div>`;
         el.innerHTML =
-            `<div class="game-select__result-title">${escapeHtml(game.alias || game.title)}</div>` +
-            `<div class="game-select__result-system">${escapeHtml(systemLabel(game.system))}</div>`;
+            cover +
+            `<div class="game-select__result-body">` +
+              `<div class="game-select__result-title">${escapeHtml(game.alias || game.title)}</div>` +
+              `<div class="game-select__result-system">${escapeHtml(systemLabel(game.system))}</div>` +
+            `</div>`;
         el.addEventListener('click', () => {
             selectedIndex = i;
             renderResults();
@@ -109,6 +118,16 @@ const applyQuery = (q) => {
         filtered = library.slice(0, DEFAULT_TOP_WHEN_EMPTY);
         selectedIndex = 0;
         renderResults();
+        return;
+    }
+    // AI mode: the search bar is a prompt, not a filter. Suppressing
+    // the dropdown while typing keeps the cinematic breath panel clean;
+    // toggle the sparkle off to search-as-filter.
+    if (aiGetMode()) {
+        filtered = [];
+        selectedIndex = 0;
+        renderResults();
+        clearTimeout(semanticTimer);
         return;
     }
     // Fuzzy hits — instant.

@@ -35,9 +35,10 @@ type retrievalDeps struct {
 // failures are folded into {"action":"say","text":"..."} so the
 // frontend never has to special-case network errors.
 type Handler struct {
-	ollama *OllamaClient
-	deps   retrievalDeps
-	log    *logger.Logger
+	ollama     *OllamaClient
+	deps       retrievalDeps
+	log        *logger.Logger
+	embedCache *queryEmbedCache // bounded LRU, 32 entries
 }
 
 // NewHandler wires the pieces the agent needs. Any of the deps can
@@ -56,6 +57,7 @@ func NewHandler(ollama *OllamaClient, lib games.GameLibrary, cache *enricher.Cac
 			Embedder: embedder,
 			TopK:     topK,
 		},
+		embedCache: newQueryEmbedCache(32),
 	}
 }
 
@@ -129,9 +131,19 @@ func (h *Handler) retrieve(ctx context.Context, query string) []Candidate {
 	var out []Candidate
 
 	// Semantic branch (may fail → empty slice; fuzzy still runs).
+	// Cache recent query embeddings so repeat queries during an active
+	// conversation ("FIFA", "halo", "mario") skip the embedder's
+	// 50-150 ms round-trip.
 	if h.deps.Index != nil && h.deps.Embedder != nil {
-		if vecs, err := h.deps.Embedder.Embed([]string{query}); err == nil && len(vecs) > 0 {
-			hits := h.deps.Index.Top(vecs[0], top)
+		var vec []float32
+		if v, ok := h.embedCache.Get(query); ok {
+			vec = v
+		} else if vecs, err := h.deps.Embedder.Embed([]string{query}); err == nil && len(vecs) > 0 {
+			vec = vecs[0]
+			h.embedCache.Put(query, vec)
+		}
+		if len(vec) > 0 {
+			hits := h.deps.Index.Top(vec, top)
 			for i, hit := range hits {
 				key := hit.GamePath + "|" + hit.System
 				if _, ok := seen[key]; ok {

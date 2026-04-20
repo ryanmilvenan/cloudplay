@@ -40,6 +40,8 @@ Respond with a single JSON object, no extra text, no markdown fencing. One of:
 
   {"action":"recommend","text":"...","candidates":[{"game_path":"...","system":"..."}]}
      when you want to offer a short list the user can pick from.
+     Each candidate MUST have only game_path and system — no other
+     fields. The frontend looks up the rest from the library.
      Example: {"action":"recommend","text":"I have FIFA or Winning Eleven.","candidates":[
          {"game_path":"ps2/FIFA 08.iso","system":"ps2"},
          {"game_path":"ps2/Winning Eleven 9.iso","system":"ps2"}

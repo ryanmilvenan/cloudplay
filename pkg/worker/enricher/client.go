@@ -86,8 +86,12 @@ func (g *IgdbGame) FirstFranchise() string {
 	return g.Franchises[0].Name
 }
 
-// CoverURL returns the HTTPS cover URL with IGDB's "//images.igdb.com"
-// protocol-relative prefix normalized, or "" when absent.
+// CoverURL returns the HTTPS cover URL, upgraded to a card-legible
+// size. IGDB defaults the response to t_thumb (90x128) which is tiny;
+// swapping the size token to t_cover_big (264x374) gets sharp cards
+// at @1x and acceptable quality at DPR-2 without a second API call.
+// https:-prefixed for protocol-relative responses. Empty when the
+// game has no cover.
 func (g *IgdbGame) CoverURL() string {
 	if g.Cover == nil || g.Cover.URL == "" {
 		return ""
@@ -96,6 +100,7 @@ func (g *IgdbGame) CoverURL() string {
 	if strings.HasPrefix(u, "//") {
 		u = "https:" + u
 	}
+	u = strings.Replace(u, "t_thumb", "t_cover_big", 1)
 	return u
 }
 

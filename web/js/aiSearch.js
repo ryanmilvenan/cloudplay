@@ -219,9 +219,15 @@ export const init = () => {
     if (btn) {
         btn.addEventListener('click', () => {
             toggle();
-            // Refocus the input so the user can keep typing without a click.
             const inp = inputEl();
-            if (inp) inp.focus();
+            if (!inp) return;
+            // Refocus the input so the user can keep typing without a click.
+            inp.focus();
+            // Re-fire input so gameList.applyQuery re-evaluates under
+            // the new mode — toggling from AI→fuzzy with text in the
+            // bar should show fuzzy matches immediately; fuzzy→AI should
+            // clear the dropdown.
+            inp.dispatchEvent(new Event('input', {bubbles: true}));
         });
     }
 };

@@ -92,7 +92,13 @@ func (h *Hub) handleUserConnection() http.HandlerFunc {
 		apps := worker.AppNames()
 		list := make([]api.AppMeta, len(apps))
 		for i := range apps {
-			list[i] = api.AppMeta{Alias: apps[i].Alias, Title: apps[i].Name, System: apps[i].System, Path: apps[i].Path}
+			list[i] = api.AppMeta{
+				Alias:    apps[i].Alias,
+				Title:    apps[i].Name,
+				System:   apps[i].System,
+				Path:     apps[i].Path,
+				CoverURL: apps[i].CoverURL,
+			}
 		}
 
 		user.InitSession(worker.Id().String(), h.conf.Webrtc.IceServers, list, activeRoomId)

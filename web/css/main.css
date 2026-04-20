@@ -194,10 +194,9 @@ html, body {
 
 .game-select__result {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 12px 18px;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
     border-bottom: 1px solid rgba(255,255,255,0.04);
     cursor: pointer;
     transition: background 0.1s;
@@ -208,7 +207,31 @@ html, body {
 }
 .game-select__result.is-selected {
     border-left: 3px solid rgba(95,174,255,0.6);
-    padding-left: 15px;
+    padding-left: 11px;
+}
+/* Cover thumbnail — IGDB t_cover_big at 264x374, rendered at ~38x54
+   for card density. Empty-state placeholder keeps the row height
+   stable as covers stream in over time. */
+.game-select__result-cover {
+    flex-shrink: 0;
+    width: 38px;
+    height: 54px;
+    object-fit: cover;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.06);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+.game-select__result-cover--empty {
+    background: linear-gradient(145deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+    border: 1px solid rgba(255,255,255,0.04);
+}
+.game-select__result-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
 }
 .game-select__result-title {
     color: #fff;

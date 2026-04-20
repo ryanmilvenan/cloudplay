@@ -42,6 +42,11 @@ type (
 		// library shown in the search bar. Not used for anything
 		// else client-side.
 		Path string `json:"path,omitempty"`
+		// CoverURL is the IGDB cover art (cover_big, 264x374) the
+		// Phase-1 search cards render as a thumbnail. Empty string
+		// when the game hasn't been IGDB-matched yet or the match
+		// had no cover asset.
+		CoverURL string `json:"cover_url,omitempty"`
 	}
 	WebrtcAnswerUserRequest string
 	WebrtcUserIceCandidate  string

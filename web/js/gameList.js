@@ -24,6 +24,7 @@
 
 import { filter as fuzzyFilter, isNaturalLanguageQuery } from './fuzzy.js?v=__V__';
 import { ask as aiAsk, getMode as aiGetMode, init as aiInit, clearConversation, onUserTyping as aiOnUserTyping } from './aiSearch.js?v=__V__';
+import { semanticSearch } from './network/semanticSearch.js?v=__V__';
 
 const screenEl = document.getElementById('game-list-screen');
 const inputEl = document.getElementById('game-select-input');
@@ -89,6 +90,19 @@ const scrollSelectedIntoView = () => {
     }
 };
 
+// applyQuery runs both the local fuzzy filter (instant, synchronous)
+// and a debounced semantic-search fetch (async, 250 ms after last
+// keystroke). The fuzzy hits render immediately so the UI always
+// feels responsive; semantic hits merge in as they arrive via
+// reciprocal-rank fusion, boosting titles that both paths rank well
+// and surfacing titles that only semantic found (e.g. the user types
+// "soccer" and we pull in FIFA / Winning Eleven even though the
+// token "soccer" appears in none of their file names).
+let semanticTimer = null;
+let semanticGeneration = 0;
+const SEMANTIC_DEBOUNCE_MS = 250;
+const SEMANTIC_TOP = 20;
+
 const applyQuery = (q) => {
     const query = (q || '').trim();
     if (!query) {
@@ -97,10 +111,51 @@ const applyQuery = (q) => {
         renderResults();
         return;
     }
-    // Fuzzy match against title + alias. Cap to 50 to keep DOM small.
-    filtered = fuzzyFilter(library, query, (g) => `${g.alias || ''} ${g.title}`).slice(0, 50);
+    // Fuzzy hits — instant.
+    const fuzzy = fuzzyFilter(library, query, (g) => `${g.alias || ''} ${g.title}`).slice(0, 50);
+    filtered = fuzzy;
     selectedIndex = 0;
     renderResults();
+
+    // Semantic hits — debounced. Stale requests are dropped by
+    // comparing generation counters; a slow response to "fifa" won't
+    // clobber a fresh response to "fifa 0".
+    clearTimeout(semanticTimer);
+    const gen = ++semanticGeneration;
+    semanticTimer = setTimeout(async () => {
+        const hits = await semanticSearch(query, SEMANTIC_TOP);
+        if (gen !== semanticGeneration || !hits.length) return;
+        filtered = blendFuzzyAndSemantic(fuzzy, hits, query);
+        renderResults();
+    }, SEMANTIC_DEBOUNCE_MS);
+};
+
+// blendFuzzyAndSemantic merges the two result sets via reciprocal-rank
+// fusion (RRF): score(game) = sum over lists of 1/(k + rank). k=60 is
+// the canonical TREC default; it down-weights tail ranks so a list of
+// 50 fuzzy hits doesn't drown out 10 strong semantic hits.
+const RRF_K = 60;
+const blendFuzzyAndSemantic = (fuzzy, semantic, query) => {
+    const byKey = new Map(); // path|system -> {game, score}
+    const addOrUpdate = (game, rrf) => {
+        const key = `${game.path}|${game.system}`;
+        const cur = byKey.get(key);
+        if (cur) cur.score += rrf;
+        else byKey.set(key, { game, score: rrf });
+    };
+    fuzzy.forEach((g, i) => addOrUpdate(g, 1 / (RRF_K + i)));
+    // semantic hits are {game_path, system, score} — look up the full
+    // game object from the library by (path, system).
+    const libByKey = new Map(library.map(g => [`${g.path}|${g.system}`, g]));
+    semantic.forEach((h, i) => {
+        const game = libByKey.get(`${h.game_path}|${h.system}`);
+        if (!game) return;
+        addOrUpdate(game, 1 / (RRF_K + i));
+    });
+    return [...byKey.values()]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 50)
+        .map(e => e.game);
 };
 
 const bindOnce = () => {

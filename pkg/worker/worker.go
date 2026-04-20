@@ -19,6 +19,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/worker/rcheevos"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/romcache"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/room"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/search"
 )
 
 type Worker struct {
@@ -97,6 +98,30 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 			}
 		}
 	}
+
+	// Phase-3 semantic search: wire the vLLM embedder + in-memory
+	// vector index into the enricher so each IGDB-matched game also
+	// gets embedded and indexed. The HTTP handler exposed below
+	// reuses the same index. Requires Igdb.Enabled + Search.Enabled
+	// — the embedder relies on the IGDB enrichment text as the
+	// source of truth for each game.
+	var searchIndex *search.Index
+	var searchEmbedder *search.Embedder
+	if conf.Search.Enabled && enr != nil {
+		searchEmbedder = search.NewEmbedder(conf.Search.EmbedURL, conf.Search.EmbedModel)
+		searchIndex = search.NewIndex()
+		enr.AttachSemanticSearch(searchEmbedder, searchIndex)
+		if n, err := enr.LoadEmbeddingsFromCache(); err != nil {
+			log.Warn().Err(err).Msg("[SEARCH] failed to seed index from cache")
+		} else {
+			log.Info().Int("count", n).Msg("[SEARCH] index seeded from cache")
+		}
+		// Backfill vectors for IGDB rows that predate Phase 3's arrival.
+		// Runs in the background at the configured RPS; new-game enrichments
+		// continue in parallel through the regular Enqueue path.
+		go enr.BackfillEmbeddingsFromIGDB(context.Background())
+	}
+
 	library.Scan()
 
 	worker := &Worker{
@@ -130,10 +155,17 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 	h, err := httpx.NewServer(
 		conf.Worker.GetAddr(),
 		func(s *httpx.Server) httpx.Handler {
-			return s.Mux().HandleW(conf.Worker.Network.PingEndpoint, func(w httpx.ResponseWriter) {
+			mux := s.Mux().HandleW(conf.Worker.Network.PingEndpoint, func(w httpx.ResponseWriter) {
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 				_, _ = w.Write([]byte{0x65, 0x63, 0x68, 0x6f}) // echo
 			})
+			// Phase-3 semantic search endpoint. Registered only when
+			// the index+embedder are live so probes against a disabled
+			// config return 404, not a half-wired 500.
+			if searchIndex != nil && searchEmbedder != nil {
+				mux.Handle("/v1/search/semantic", search.NewHandler(searchEmbedder, searchIndex, log))
+			}
+			return mux
 		},
 		httpx.WithServerConfig(conf.Worker.Server),
 		httpx.HttpsRedirect(false),

@@ -367,3 +367,15 @@ igdb:
   cachePath: /var/mnt/data/media/games/.metadata/igdb.db
   requestsPerSecond: 4
   minConfidence: 0.6
+
+# Phase-3 semantic search. Uses spark@lightning's ai-openclaw-embeddings
+# service (Qwen3-Embedding-0.6B via vLLM, 1024-dim vectors, pooling
+# runner at 5% GPU so it coexists with coder+concierge without thrashing).
+# Requires igdb.enabled=true so the enricher has metadata text to embed.
+# Disabled by default; flip to true per-host.
+search:
+  enabled: false
+  embedUrl: http://lightning.local:8088/v1/embeddings
+  embedModel: embeddings
+  batchSize: 32
+  requestsPerSecond: 4

@@ -26,6 +26,12 @@ func New(conf config.CoordinatorConfig, log *logger.Logger) (*Coordinator, error
 	h, err := NewHTTPServer(conf, log, func(mux *httpx.Mux) *httpx.Mux {
 		mux.HandleFunc("/ws", coordinator.hub.handleUserConnection())
 		mux.HandleFunc("/wso", coordinator.hub.handleWorkerConnection())
+		// Phase-3 semantic search is served by the worker on localhost:9000.
+		// The worker's HTTP surface isn't externally reachable through
+		// Traefik (only the coordinator is), so proxy the request here.
+		// Single-container deploy: worker is always on localhost:9000;
+		// multi-worker deploys will need a real load-balanced route.
+		mux.Handle("/v1/search/semantic", newSemanticSearchProxy(log))
 		return mux
 	})
 	if err != nil {

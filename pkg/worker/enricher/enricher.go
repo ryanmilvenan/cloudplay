@@ -2,6 +2,9 @@ package enricher
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/giongto35/cloud-game/v3/pkg/games"
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/search"
 )
 
 // Enricher wraps Client+Cache and drives a rate-limited background
@@ -28,6 +32,13 @@ type Enricher struct {
 	log           *logger.Logger
 	rps           int
 	minConfidence float64
+
+	// Optional semantic-search plumbing. When Embedder+Index are set
+	// the enricher also embeds each successfully-matched game and
+	// seeds the in-memory vector index. Phase 3's search handler
+	// reads the index directly.
+	embedder *search.Embedder
+	index    *search.Index
 
 	mu    sync.Mutex
 	queue []games.GameMetadata // games awaiting lookup
@@ -56,6 +67,87 @@ func New(cli *Client, cache *Cache, rps int, minConfidence float64, log *logger.
 		minConfidence: minConfidence,
 		known:         make(map[string]bool),
 	}
+}
+
+// AttachSemanticSearch wires in the vLLM embedder and the in-memory
+// vector index. Called by the worker when Search.Enabled is true.
+// Nil-safe: if either arg is nil the enricher stays in plain-IGDB mode.
+func (e *Enricher) AttachSemanticSearch(embedder *search.Embedder, index *search.Index) {
+	if e == nil {
+		return
+	}
+	e.embedder = embedder
+	e.index = index
+}
+
+// LoadEmbeddingsFromCache streams every persisted embedding into the
+// in-memory index. Called once at worker startup after AttachSemanticSearch
+// so restarts don't re-embed the library.
+func (e *Enricher) LoadEmbeddingsFromCache() (int, error) {
+	if e == nil || e.index == nil || e.cache == nil {
+		return 0, nil
+	}
+	rows, err := e.cache.AllEmbeddings()
+	if err != nil {
+		return 0, err
+	}
+	for _, r := range rows {
+		e.index.Upsert(search.Entry{
+			GamePath: r.GamePath,
+			System:   r.System,
+			Vector:   r.Vector,
+		})
+	}
+	return len(rows), nil
+}
+
+// BackfillEmbeddingsFromIGDB walks every IGDB-matched row that
+// doesn't yet have an embedding, embeds its metadata string, and
+// populates both cache and in-memory index. Covers the case where
+// the IGDB cache was populated before Phase-3 landed: ApplyCached
+// marks those games as "already known" so the enricher's regular
+// Enqueue → processOne path skips them, and their embedding
+// therefore never gets written on its own.
+//
+// Runs in a goroutine; the caller can ignore the return. Rate-limited
+// by e.rps just like the main backfill so we don't burst the embedder.
+func (e *Enricher) BackfillEmbeddingsFromIGDB(ctx context.Context) {
+	if e == nil || e.embedder == nil || e.index == nil || e.cache == nil {
+		return
+	}
+	rows, err := e.cache.AllMatchedNeedingEmbedding()
+	if err != nil {
+		e.log.Warn().Err(err).Msg("[EMBED] backfill query failed")
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	e.log.Info().Int("count", len(rows)).
+		Msg("[EMBED] backfilling embeddings for matched IGDB rows")
+	interval := time.Second / time.Duration(e.rps)
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	done := 0
+	for _, r := range rows {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		// Build the same embedding text processOne would have built.
+		g := games.GameMetadata{Path: r.GamePath, System: r.System, Name: r.Name}
+		e.embedAndIndex(g, r)
+		done++
+		if done%50 == 0 {
+			e.log.Info().Int("done", done).Int("total", len(rows)).
+				Msg("[EMBED] backfill progress")
+		}
+	}
+	e.log.Info().Int("done", done).Msg("[EMBED] backfill complete")
 }
 
 // ApplyCached hydrates a GameMetadata in place with cached fields when
@@ -207,6 +299,125 @@ func (e *Enricher) processOne(g games.GameMetadata) {
 	e.log.Info().Str("game", g.Name).Str("igdb", best.Name).
 		Int("year", row.Year).Str("genre", row.Genre).
 		Float64("score", score).Msg("[IGDB] enriched")
+
+	// Phase-3 semantic search: embed and index. Done inline so a single
+	// game's backfill either fully completes (IGDB + embedding cached
+	// and indexed) or both fail and retry next restart. The embedder
+	// call adds ~100-200 ms per game; at 4 req/s this is well within
+	// our overall pacing budget.
+	e.embedAndIndex(g, row)
+}
+
+// embedAndIndex is the Phase-3 hook wired into processOne's success
+// path. Builds the canonical embedding text from the IGDB-enriched
+// row, checks whether the cache already has an up-to-date vector (by
+// text-hash), and calls out to the embedder only when needed.
+func (e *Enricher) embedAndIndex(g games.GameMetadata, row Row) {
+	if e.embedder == nil || e.index == nil || e.cache == nil {
+		return
+	}
+	text := buildEmbeddingText(g, row)
+	if text == "" {
+		return
+	}
+	hash := sha256Hex(text)
+	if existing, _ := e.cache.GetEmbedding(g.Path, g.System); existing != nil && existing.TextHash == hash {
+		// Up to date. Nothing to do; the index was already seeded from
+		// cache at startup.
+		return
+	}
+	vecs, err := e.embedder.Embed([]string{text})
+	if err != nil || len(vecs) == 0 || len(vecs[0]) == 0 {
+		if err != nil {
+			e.log.Warn().Err(err).Str("game", g.Name).Msg("[EMBED] failed")
+		}
+		return
+	}
+	v := vecs[0]
+	search.NormalizeInPlace(v)
+	if err := e.cache.PutEmbedding(EmbeddingRow{
+		GamePath: g.Path,
+		System:   g.System,
+		Dim:      len(v),
+		TextHash: hash,
+		Vector:   v,
+		UpdatedAt: time.Now(),
+	}); err != nil {
+		e.log.Warn().Err(err).Msg("[EMBED] cache put")
+		return
+	}
+	e.index.Upsert(search.Entry{GamePath: g.Path, System: g.System, Vector: v})
+}
+
+// buildEmbeddingText is the single source of truth for the string the
+// embedder sees per game. Ordered so title and system (the most-
+// discriminating tokens) come first, then the IGDB context (genre,
+// franchise, year, summary). Empty fields are skipped to avoid
+// diluting the signal with placeholder text.
+func buildEmbeddingText(g games.GameMetadata, row Row) string {
+	parts := []string{}
+	if label := systemLabel(g.System); label != "" {
+		parts = append(parts, label)
+	}
+	title := g.Alias
+	if title == "" {
+		title = g.Name
+	}
+	if title != "" {
+		parts = append(parts, title)
+	}
+	if row.Franchise != "" && !strings.EqualFold(row.Franchise, title) {
+		parts = append(parts, row.Franchise)
+	}
+	if row.Genre != "" {
+		parts = append(parts, row.Genre)
+	}
+	if row.Year > 0 {
+		parts = append(parts, fmt.Sprintf("%d", row.Year))
+	}
+	if row.Summary != "" {
+		parts = append(parts, row.Summary)
+	}
+	return strings.Join(parts, ". ")
+}
+
+// systemLabel humanizes a system slug so the embedder sees "PlayStation 2"
+// rather than "ps2" — critical for queries like "soccer game on ps2"
+// where the user types the slug but the embedding compare against
+// summary/description text that uses the full platform name.
+func systemLabel(sys string) string {
+	switch sys {
+	case "xbox":
+		return "Xbox"
+	case "ps2":
+		return "PlayStation 2"
+	case "pcsx":
+		return "PlayStation"
+	case "gc":
+		return "GameCube"
+	case "wii":
+		return "Wii"
+	case "n64":
+		return "Nintendo 64"
+	case "snes":
+		return "Super Nintendo"
+	case "nes":
+		return "NES"
+	case "gba":
+		return "Game Boy Advance"
+	case "dreamcast":
+		return "Dreamcast"
+	case "mame":
+		return "Arcade"
+	case "dos":
+		return "DOS"
+	}
+	return sys
+}
+
+func sha256Hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }
 
 // -- normalization & matching ------------------------------------------------

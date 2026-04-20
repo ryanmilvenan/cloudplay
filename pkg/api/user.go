@@ -35,6 +35,13 @@ type (
 		Alias  string `json:"alias,omitempty"`
 		Title  string `json:"title"`
 		System string `json:"system"`
+		// Path is the library-relative filename (e.g.
+		// "xbox/Halo.xiso.iso"). Exposed to the browser so the
+		// Phase-3 semantic-search blend can match incoming hits
+		// (which key on {game_path, system}) against the local
+		// library shown in the search bar. Not used for anything
+		// else client-side.
+		Path string `json:"path,omitempty"`
 	}
 	WebrtcAnswerUserRequest string
 	WebrtcUserIceCandidate  string

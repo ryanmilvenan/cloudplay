@@ -22,6 +22,7 @@ type WorkerConfig struct {
 	Version   Version
 	Xemu      XemuConfig
 	Igdb      IgdbConfig
+	Search    SemanticSearchConfig `yaml:"search"`
 }
 
 type Storage struct {

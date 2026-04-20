@@ -2,7 +2,9 @@ package enricher
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -80,7 +82,120 @@ CREATE TABLE IF NOT EXISTS igdb_cache (
     updated_at  INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (game_path, system)
 );
+
+-- Phase-3 semantic search index. Sibling table so a single open file
+-- hydrates both genre metadata and embeddings. Stored as a raw BLOB
+-- of little-endian float32s — matches Go's encoding/binary and is
+-- half the disk footprint of a JSON-stringified vector. text_hash is
+-- sha256 of the embedded text so a future change to the embedding-
+-- source format (e.g. including summary) invalidates old rows.
+CREATE TABLE IF NOT EXISTS embeddings (
+    game_path   TEXT NOT NULL,
+    system      TEXT NOT NULL,
+    dim         INTEGER NOT NULL,
+    text_hash   TEXT NOT NULL,
+    vector      BLOB NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (game_path, system)
+);
 `
+
+// EmbeddingRow is one persisted vector. Vector length must equal Dim.
+type EmbeddingRow struct {
+	GamePath  string
+	System    string
+	Dim       int
+	TextHash  string
+	Vector    []float32
+	UpdatedAt time.Time
+}
+
+// GetEmbedding returns the cached vector for (path, system), or nil
+// if absent. Callers typically check the returned row's TextHash
+// against a freshly-computed hash to decide whether to re-embed.
+func (c *Cache) GetEmbedding(path, system string) (*EmbeddingRow, error) {
+	row := c.db.QueryRow(`
+		SELECT dim, text_hash, vector, updated_at
+		FROM embeddings WHERE game_path = ? AND system = ?`, path, system)
+	r := &EmbeddingRow{GamePath: path, System: system}
+	var blob []byte
+	var updated int64
+	if err := row.Scan(&r.Dim, &r.TextHash, &blob, &updated); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(blob) != r.Dim*4 {
+		return nil, fmt.Errorf("cache: embedding blob length %d != dim*4 (%d)", len(blob), r.Dim*4)
+	}
+	r.Vector = bytesToFloat32(blob)
+	r.UpdatedAt = time.Unix(updated, 0)
+	return r, nil
+}
+
+// PutEmbedding upserts a vector row.
+func (c *Cache) PutEmbedding(r EmbeddingRow) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	updated := r.UpdatedAt.Unix()
+	if updated == 0 {
+		updated = time.Now().Unix()
+	}
+	blob := float32sToBytes(r.Vector)
+	_, err := c.db.Exec(`
+		INSERT INTO embeddings (game_path, system, dim, text_hash, vector, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(game_path, system) DO UPDATE SET
+		  dim=excluded.dim,
+		  text_hash=excluded.text_hash,
+		  vector=excluded.vector,
+		  updated_at=excluded.updated_at;
+	`, r.GamePath, r.System, r.Dim, r.TextHash, blob, updated)
+	return err
+}
+
+// AllEmbeddings streams every embedding row. Used at worker startup
+// to seed the in-memory vector index.
+func (c *Cache) AllEmbeddings() ([]EmbeddingRow, error) {
+	rows, err := c.db.Query(`SELECT game_path, system, dim, text_hash, vector, updated_at FROM embeddings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EmbeddingRow
+	for rows.Next() {
+		var r EmbeddingRow
+		var blob []byte
+		var updated int64
+		if err := rows.Scan(&r.GamePath, &r.System, &r.Dim, &r.TextHash, &blob, &updated); err != nil {
+			return nil, err
+		}
+		if len(blob) != r.Dim*4 {
+			continue // corrupt row, skip
+		}
+		r.Vector = bytesToFloat32(blob)
+		r.UpdatedAt = time.Unix(updated, 0)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func float32sToBytes(v []float32) []byte {
+	buf := make([]byte, len(v)*4)
+	for i, f := range v {
+		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
+	}
+	return buf
+}
+
+func bytesToFloat32(b []byte) []float32 {
+	v := make([]float32, len(b)/4)
+	for i := range v {
+		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	}
+	return v
+}
 
 // Get returns the cached row for (path, system), or nil if absent.
 func (c *Cache) Get(path, system string) (*Row, error) {
@@ -138,6 +253,38 @@ func (c *Cache) Put(r Row) error {
 func (c *Cache) Stats() (total, matched int, err error) {
 	err = c.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(matched),0) FROM igdb_cache`).Scan(&total, &matched)
 	return
+}
+
+// AllMatchedNeedingEmbedding returns every IGDB-matched row whose
+// (game_path, system) has no corresponding embeddings row. Used by
+// the enricher's startup backfill to cover IGDB rows that predate
+// Phase-3 embedding support.
+func (c *Cache) AllMatchedNeedingEmbedding() ([]Row, error) {
+	rows, err := c.db.Query(`
+		SELECT i.game_path, i.system, i.matched, i.igdb_id, i.name, i.genre,
+		       i.franchise, i.year, i.summary, i.cover_url, i.updated_at
+		FROM igdb_cache i
+		LEFT JOIN embeddings e
+		  ON e.game_path = i.game_path AND e.system = i.system
+		WHERE i.matched = 1 AND e.game_path IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var r Row
+		var matched int
+		var updated int64
+		if err := rows.Scan(&r.GamePath, &r.System, &matched, &r.IgdbID, &r.Name,
+			&r.Genre, &r.Franchise, &r.Year, &r.Summary, &r.CoverURL, &updated); err != nil {
+			return nil, err
+		}
+		r.Matched = matched != 0
+		r.UpdatedAt = time.Unix(updated, 0)
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // Close releases the underlying database.

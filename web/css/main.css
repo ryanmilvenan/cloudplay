@@ -496,12 +496,51 @@ html, body {
     opacity: 0.18;
 }
 
-@media (max-width: 640px) {
-    .game-select__stage { padding: 22px 10px 28px; gap: 14px; }
-    .game-select__input { font-size: 15px; padding: 12px 0; }
+/* Mobile portrait — keep the same voice-of-god split: breath lives in
+   the top third, search bar sits at 34vh, chain + results flow into the
+   bottom two-thirds. The old breakpoint collapsed the top pad and
+   stacked everything together; this restores the cinematic layout at
+   phone scale.
+   Font-size stays at 16px — iOS Safari auto-zooms on focus for any
+   input smaller than that, which then traps the viewport mid-zoom. */
+@media (max-width: 640px) and (orientation: portrait) {
+    .game-select__stage { padding: 34vh 12px 28px; gap: 12px; }
+    .game-select__input { font-size: 16px; padding: 12px 0; }
     .game-select__result { padding: 10px 14px; }
     .game-select__result.is-selected { padding-left: 11px; }
-    .ai-breath { font-size: 16px; }
+    .ai-breath {
+        font-size: clamp(18px, 4.6vw, 28px);
+        padding: 0 6%;
+    }
+    .ai-breath-info { top: calc(33vh - 26px); right: 12px; }
+    /* Cover art scales down slightly — density matters more than card size
+       when the dropdown is fighting an on-screen keyboard. */
+    .game-select__result-cover,
+    .ai-retrieved-panel__cover { width: 34px; height: 48px; }
+    .ai-retrieved-panel__box { width: min(96vw, 520px); }
+}
+
+/* Mobile landscape — phones have almost no vertical room in landscape
+   (375 × 667 becomes 667 × 375). Using 34vh top pad here leaves only
+   ~250 px for the input + chain, which the on-screen keyboard then
+   eats entirely. Compress the top breath region and tighten the
+   search-bar padding so the input remains visible above the keyboard. */
+@media (max-height: 500px) and (orientation: landscape) {
+    .game-select__stage { padding: 26vh 14px 16px; gap: 8px; max-width: 620px; }
+    .game-select__input { font-size: 16px; padding: 9px 0; }
+    .game-select__searchwrap { padding: 2px 6px 2px 14px; }
+    .game-select__ai-toggle { width: 34px; height: 34px; }
+    .game-select__result { padding: 8px 12px; }
+    .ai-breath {
+        height: 24vh;
+        font-size: clamp(15px, 2.8vw, 22px);
+        padding: 0 8%;
+    }
+    .ai-breath-info { top: calc(24vh - 22px); right: 14px; width: 26px; height: 26px; }
+    .ai-chain { font-size: 12px; }
+    .game-select__result-cover,
+    .ai-retrieved-panel__cover { width: 30px; height: 42px; }
+    .ai-retrieved-panel__box { max-height: 86vh; }
 }
 
 /* ── Toast notifications ── */

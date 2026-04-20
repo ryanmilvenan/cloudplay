@@ -197,6 +197,23 @@ const bindOnce = () => {
         onStart();
     });
     if (!inputEl) return;
+    // Tap-anywhere-on-the-search-bar focusing. On mobile the padded
+    // wrap around the input is a much bigger tap target than the input
+    // itself; without this, a mis-aimed tap lands on the wrap's padding
+    // and iOS/Android doesn't summon the keyboard because no input got
+    // focused. We also explicitly call .focus() inside a same-tick
+    // pointer handler, which is what iOS requires to raise the keyboard.
+    const searchWrap = inputEl.closest('.game-select__searchwrap');
+    if (searchWrap) {
+        const focusInput = (e) => {
+            // Avoid stealing focus when the user taps the AI toggle
+            // sitting inside the same wrap.
+            if (e.target.closest('.game-select__ai-toggle')) return;
+            if (document.activeElement !== inputEl) inputEl.focus();
+        };
+        searchWrap.addEventListener('pointerdown', focusInput);
+        searchWrap.addEventListener('click', focusInput);
+    }
     inputEl.addEventListener('input', (e) => {
         if (disabled) return;
         // As soon as the user edits the bar, dismiss the big top-third

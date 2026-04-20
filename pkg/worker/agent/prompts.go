@@ -17,6 +17,11 @@ type Candidate struct {
 	Genre     string `json:"genre,omitempty"`
 	Year      int    `json:"year,omitempty"`
 	Franchise string `json:"franchise,omitempty"`
+	// CoverURL is IGDB cover art (t_cover_big) — wire-only, so the
+	// frontend's "what the agent saw" debug panel can render a
+	// thumbnail next to each candidate. Not fed into BuildPrompt;
+	// keeps the prompt cheap while enriching the browser payload.
+	CoverURL string `json:"cover_url,omitempty"`
 }
 
 // HistoryTurn is one prior turn of the conversation. Roles: "user",

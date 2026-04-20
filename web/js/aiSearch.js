@@ -20,8 +20,13 @@ const MAX_CHAIN = 4;
 
 const chainEl = () => document.getElementById('ai-chain');
 const breathEl = () => document.getElementById('ai-breath');
+const breathInfoEl = () => document.getElementById('ai-breath-info');
 const aiToggleEl = () => document.getElementById('game-select-ai-toggle');
 const inputEl = () => document.getElementById('game-select-input');
+const panelEl = () => document.getElementById('ai-retrieved-panel');
+const panelListEl = () => document.getElementById('ai-retrieved-list');
+const panelCloseEl = () => document.getElementById('ai-retrieved-close');
+const panelBackdropEl = () => panelEl()?.querySelector('.ai-retrieved-panel__backdrop');
 
 // AI toggle — click switches mode. Persisted to localStorage so a page
 // refresh remembers the user's choice.
@@ -49,10 +54,14 @@ export const setMode = (on) => {
 export const getMode = () => aiMode;
 export const toggle = () => setMode(!aiMode);
 
-// Turn chain state. Each entry is {role:'user'|'ai', text}.
+// Turn chain state. Each entry is {role:'user'|'ai', text, retrieved?}.
 // index 0 = most recent; we render in reverse so the newest line sits
 // closest to the search bar and older ones fade toward the top.
+// retrieved (AI turns only) is the ranked candidate list the LLM saw
+// — kept so the user can re-open it from the chain to debug or launch.
 const turns = [];
+
+const INFO_ICON_SVG = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v4h1"/></svg>`;
 
 const renderChain = () => {
     const root = chainEl();
@@ -71,13 +80,31 @@ const renderChain = () => {
         const opacity = Math.max(0.1, 0.72 - i * 0.2);
         el.className = 'ai-chain__entry ai-chain__entry--' + turn.role;
         el.style.opacity = String(opacity);
-        el.textContent = turn.text;
+        const textNode = document.createElement('span');
+        textNode.className = 'ai-chain__text';
+        textNode.textContent = turn.text;
+        el.appendChild(textNode);
+        if (turn.role === 'ai' && Array.isArray(turn.retrieved) && turn.retrieved.length) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'ai-chain__info';
+            btn.title = `What the agent saw (${turn.retrieved.length})`;
+            btn.setAttribute('aria-label', btn.title);
+            btn.innerHTML = INFO_ICON_SVG;
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openRetrievedPanel(turn.retrieved);
+            });
+            el.appendChild(btn);
+        }
         root.appendChild(el);
     });
 };
 
-const pushTurn = (role, text) => {
-    turns.unshift({ role, text });
+const pushTurn = (role, text, retrieved) => {
+    const turn = { role, text };
+    if (retrieved && retrieved.length) turn.retrieved = retrieved;
+    turns.unshift(turn);
     while (turns.length > MAX_CHAIN) turns.pop();
     renderChain();
 };
@@ -116,6 +143,85 @@ const showBreath = (text) => {
 // response. This is what keeps the breath/chain from visually
 // double-printing the same line.
 let liveAi = null;
+// liveRetrieved: the candidate set the LLM saw for the current breath.
+// Moves into the chain entry alongside liveAi when the breath
+// graduates. Drives the small info button anchored to the breath.
+let liveRetrieved = null;
+
+const setBreathInfoVisible = (show) => {
+    const el = breathInfoEl();
+    if (!el) return;
+    if (show) {
+        el.classList.remove('hidden');
+        // next tick so the opacity transition runs
+        requestAnimationFrame(() => el.classList.add('is-visible'));
+    } else {
+        el.classList.remove('is-visible');
+        el.classList.add('hidden');
+    }
+};
+
+const openRetrievedPanel = (retrieved) => {
+    const panel = panelEl();
+    const list = panelListEl();
+    if (!panel || !list) return;
+    list.innerHTML = '';
+    if (!retrieved || !retrieved.length) {
+        const empty = document.createElement('div');
+        empty.className = 'ai-retrieved-panel__empty';
+        empty.textContent = 'The agent had no candidates for that turn.';
+        list.appendChild(empty);
+    } else {
+        retrieved.forEach((c, i) => {
+            const row = document.createElement('div');
+            row.className = 'ai-retrieved-panel__row';
+            row.setAttribute('role', 'button');
+            row.tabIndex = 0;
+            const rank = typeof c.rank === 'number' && c.rank > 0 ? c.rank : i + 1;
+            const coverHtml = c.cover_url
+                ? `<img class="ai-retrieved-panel__cover" src="${escapeHtml(c.cover_url)}" alt="" loading="lazy" onerror="this.classList.add('ai-retrieved-panel__cover--empty');this.removeAttribute('src');">`
+                : `<div class="ai-retrieved-panel__cover ai-retrieved-panel__cover--empty"></div>`;
+            const metaBits = [];
+            if (c.system) metaBits.push(`<span class="ai-retrieved-panel__meta-sys">${escapeHtml(c.system)}</span>`);
+            if (c.genre) metaBits.push(escapeHtml(c.genre));
+            if (c.year) metaBits.push(String(c.year));
+            if (c.franchise && (!c.title || c.franchise.toLowerCase() !== c.title.toLowerCase())) {
+                metaBits.push(`series: ${escapeHtml(c.franchise)}`);
+            }
+            row.innerHTML =
+                `<div class="ai-retrieved-panel__rank">${rank}</div>` +
+                coverHtml +
+                `<div class="ai-retrieved-panel__body">` +
+                  `<div class="ai-retrieved-panel__title-line">${escapeHtml(c.title || c.game_path || '(untitled)')}</div>` +
+                  `<div class="ai-retrieved-panel__meta">${metaBits.join(' · ')}</div>` +
+                `</div>`;
+            const launch = () => {
+                if (!c.game_path || !c.system) { closeRetrievedPanel(); return; }
+                closeRetrievedPanel();
+                if (typeof onLaunch === 'function') {
+                    onLaunch({action: 'launch', game_path: c.game_path, system: c.system});
+                }
+            };
+            row.addEventListener('click', launch);
+            row.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); launch(); }
+            });
+            list.appendChild(row);
+        });
+    }
+    panel.classList.remove('hidden');
+};
+
+const closeRetrievedPanel = () => {
+    const panel = panelEl();
+    if (!panel) return;
+    panel.classList.add('hidden');
+};
+
+const escapeHtml = (s = '') =>
+    String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[c]);
 
 // onLaunch: set by wiring.js so the agent's `launch` action can hand
 // back to the normal start-game flow. Set after init().
@@ -134,16 +240,21 @@ const history = []; // [{role:'user'|'agent', text}]
 // only change is the text source (the LLM instead of a stub).
 export const ask = async (query) => {
     if (!query || !query.trim()) return;
-    // Previous AI response graduates from breath → chain.
+    // Previous AI response graduates from breath → chain, carrying
+    // its retrieved set so the user can still open "what did the
+    // agent see" on the older turn.
     if (liveAi) {
-        pushTurn('ai', liveAi);
+        pushTurn('ai', liveAi, liveRetrieved);
         liveAi = null;
+        liveRetrieved = null;
     }
     pushTurn('user', query);
     history.push({role: 'user', text: query});
     trimHistory();
-    // Fade out the previous breath before the new one surfaces.
+    // Fade out the previous breath + its info affordance before the
+    // new response surfaces.
     showBreath(null);
+    setBreathInfoVisible(false);
     // "Thinking" gap — covers network + LLM latency with the same
     // quiet inhale-between-turns feel as a no-op transition.
     await wait(600);
@@ -161,9 +272,12 @@ export const ask = async (query) => {
     }
 
     const text = (action && action.text) ? String(action.text) : '';
+    const retrieved = (action && Array.isArray(action.retrieved)) ? action.retrieved : null;
     if (text) {
         liveAi = text;
+        liveRetrieved = retrieved;
         showBreath(text);
+        setBreathInfoVisible(!!(retrieved && retrieved.length));
         history.push({role: 'agent', text});
         trimHistory();
     }
@@ -190,8 +304,11 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
 export const clearConversation = () => {
     turns.length = 0;
     liveAi = null;
+    liveRetrieved = null;
     renderChain();
     showBreath(null);
+    setBreathInfoVisible(false);
+    closeRetrievedPanel();
 };
 
 // onUserTyping(): called from gameList's input handler the instant the
@@ -203,10 +320,12 @@ export const onUserTyping = () => {
     const el = breathEl();
     if (!el || !el.classList.contains('is-visible')) return;
     if (liveAi) {
-        pushTurn('ai', liveAi);
+        pushTurn('ai', liveAi, liveRetrieved);
         liveAi = null;
+        liveRetrieved = null;
     }
     showBreath(null);
+    setBreathInfoVisible(false);
 };
 
 // Bind toggle button click handler. Idempotent.
@@ -230,4 +349,19 @@ export const init = () => {
             inp.dispatchEvent(new Event('input', {bubbles: true}));
         });
     }
+    const info = breathInfoEl();
+    if (info) {
+        info.addEventListener('click', () => {
+            if (liveRetrieved && liveRetrieved.length) openRetrievedPanel(liveRetrieved);
+        });
+    }
+    const close = panelCloseEl();
+    if (close) close.addEventListener('click', closeRetrievedPanel);
+    const backdrop = panelBackdropEl();
+    if (backdrop) backdrop.addEventListener('click', closeRetrievedPanel);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !panelEl()?.classList.contains('hidden')) {
+            closeRetrievedPanel();
+        }
+    });
 };

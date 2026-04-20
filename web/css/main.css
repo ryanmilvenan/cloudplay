@@ -277,6 +277,187 @@ html, body {
 .ai-chain__entry--user { font-style: italic; }
 .ai-chain__entry--ai   { color: rgba(200,220,255,0.75); }
 
+/* Inline "what did the agent see" affordance on AI chain entries.
+   Sits flush with the end of the response text; tinted to match the
+   entry's cool hue but with a hover/focus punch-up so it reads as
+   interactive. Only rendered when that turn carried a retrieved set. */
+.ai-chain__info {
+    margin-left: 8px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    color: rgba(150,190,240,0.55);
+    cursor: pointer;
+    vertical-align: middle;
+    line-height: 0;
+    transition: color 0.2s;
+}
+.ai-chain__info:hover,
+.ai-chain__info:focus-visible { color: rgba(220,235,255,0.95); outline: none; }
+.ai-chain__info svg { display: inline-block; }
+
+/* Breath-side info affordance — a quiet "what did the agent see"
+   dot anchored just below the top-third breath region. Pointer-events
+   are on (unlike the breath itself) so it's actually clickable. */
+.ai-breath-info {
+    position: absolute;
+    top: calc(33vh - 28px);
+    right: 20px;
+    width: 30px; height: 30px;
+    padding: 0;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(180,200,255,0.18);
+    border-radius: 50%;
+    color: rgba(200,220,255,0.7);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 1s ease-out, color 0.2s, background 0.2s, border-color 0.2s;
+}
+.ai-breath-info.is-visible { opacity: 0.78; }
+.ai-breath-info:hover {
+    opacity: 1;
+    color: rgba(255,255,255,0.95);
+    background: rgba(95,174,255,0.12);
+    border-color: rgba(95,174,255,0.45);
+}
+.ai-breath-info.hidden { display: none; }
+
+/* Retrieved-candidates debug panel — fullscreen modal with a dim
+   backdrop. Box is a compact card centered in the viewport. Rows
+   match the fuzzy dropdown visual language (cover + title + system)
+   so clicking a row to launch feels like the same gesture as
+   clicking a fuzzy hit. */
+.ai-retrieved-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.ai-retrieved-panel.hidden { display: none; }
+.ai-retrieved-panel__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+.ai-retrieved-panel__box {
+    position: relative;
+    width: min(620px, 92vw);
+    max-height: min(78vh, 720px);
+    background: rgba(18,22,30,0.96);
+    border: 1px solid rgba(95,174,255,0.25);
+    border-radius: 14px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.02);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.ai-retrieved-panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.ai-retrieved-panel__title {
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(200,220,255,0.85);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.ai-retrieved-panel__close {
+    background: transparent;
+    border: 0;
+    color: rgba(255,255,255,0.5);
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+}
+.ai-retrieved-panel__close:hover { color: #fff; }
+.ai-retrieved-panel__list {
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.12) transparent;
+}
+.ai-retrieved-panel__row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.ai-retrieved-panel__row:hover { background: rgba(95,174,255,0.08); }
+.ai-retrieved-panel__empty {
+    padding: 24px 18px;
+    text-align: center;
+    color: rgba(255,255,255,0.4);
+    font-size: 14px;
+    font-style: italic;
+}
+.ai-retrieved-panel__rank {
+    flex-shrink: 0;
+    width: 22px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    color: rgba(255,255,255,0.35);
+    letter-spacing: 0.05em;
+}
+.ai-retrieved-panel__cover {
+    flex-shrink: 0;
+    width: 38px;
+    height: 54px;
+    object-fit: cover;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.06);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+.ai-retrieved-panel__cover--empty {
+    background: linear-gradient(145deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+    border: 1px solid rgba(255,255,255,0.04);
+}
+.ai-retrieved-panel__body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.ai-retrieved-panel__title-line {
+    color: #fff;
+    font-size: 15px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ai-retrieved-panel__meta {
+    font-size: 11px;
+    color: rgba(255,255,255,0.4);
+    letter-spacing: 0.04em;
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+}
+.ai-retrieved-panel__meta-sys {
+    color: rgba(200,220,255,0.65);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 10px;
+}
+
 /* AI breath — the voice of god speaking to you. Occupies the top
    third of the screen, not pinned to any other element. Emerges
    slowly from darkness (2s ease-in fade), doesn't slide or move,

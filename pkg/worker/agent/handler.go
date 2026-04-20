@@ -70,11 +70,18 @@ type turnRequest struct {
 // rather than a sum type because JSON from the LLM may omit fields
 // and we echo it through unchanged.
 type Action struct {
-	Action     string      `json:"action"`
-	Text       string      `json:"text,omitempty"`
-	GamePath   string      `json:"game_path,omitempty"`
-	System     string      `json:"system,omitempty"`
+	Action   string `json:"action"`
+	Text     string `json:"text,omitempty"`
+	GamePath string `json:"game_path,omitempty"`
+	System   string `json:"system,omitempty"`
+	// Candidates is the LLM's own picks for a "recommend" action —
+	// validated (hallucinated paths dropped) before it's sent.
 	Candidates []Candidate `json:"candidates,omitempty"`
+	// Retrieved is the full candidate set the LLM was shown for this
+	// turn, ranked. Sent on every response (regardless of action) so
+	// the frontend can render a "what did the agent see" debug panel
+	// and let the user launch any retrieved title directly.
+	Retrieved []Candidate `json:"retrieved,omitempty"`
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -108,18 +115,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	raw, err := h.ollama.Chat(ctx, messages)
 	if err != nil {
 		h.log.Warn().Err(err).Msg("[AGENT] chat failed")
-		writeAction(w, Action{Action: "say", Text: "I'm having trouble reaching the assistant. Try picking from the list."})
+		writeAction(w, Action{Action: "say", Text: "I'm having trouble reaching the assistant. Try picking from the list.", Retrieved: candidates})
 		return
 	}
 	action, err := parseAction(raw)
 	if err != nil {
 		h.log.Warn().Err(err).Str("raw", firstN(raw, 200)).Msg("[AGENT] unparseable LLM output")
-		writeAction(w, Action{Action: "say", Text: firstN(raw, 240)})
+		writeAction(w, Action{Action: "say", Text: firstN(raw, 240), Retrieved: candidates})
 		return
 	}
 	// Validate: launch / recommend actions must reference real candidates.
 	// Drops inventor mode — the model occasionally makes up a game_path.
 	action = h.validate(action, candidates)
+	action.Retrieved = candidates
 	writeAction(w, action)
 }
 
@@ -202,6 +210,7 @@ func (h *Handler) makeCandidate(rank int, gamePath, system string) Candidate {
 			c.Genre = row.Genre
 			c.Year = row.Year
 			c.Franchise = row.Franchise
+			c.CoverURL = row.CoverURL
 		}
 	}
 	// Fallback: trim the system-prefixed path down to just the
@@ -225,6 +234,7 @@ func (h *Handler) makeCandidateFromMeta(rank int, g games.GameMetadata) Candidat
 		Genre:     g.Genre,
 		Year:      g.Year,
 		Franchise: g.Franchise,
+		CoverURL:  g.CoverURL,
 	}
 }
 

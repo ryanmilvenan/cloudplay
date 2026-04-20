@@ -73,6 +73,34 @@
                      persists until the next user submission, then fades
                      out as the new response fades in. -->
                 <div id="ai-breath" class="ai-breath" aria-live="polite"></div>
+                <!-- Small "what did the agent see" affordance, tied to
+                     the live breath. Visible when the current response
+                     has a retrieved set; opens the retrieved panel. -->
+                <button id="ai-breath-info" class="ai-breath-info hidden"
+                        type="button" aria-label="Show what the agent saw"
+                        title="What the agent saw">
+                    <svg viewBox="0 0 24 24" width="16" height="16"
+                         fill="none" stroke="currentColor" stroke-width="1.8"
+                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="9"/>
+                        <path d="M12 8h.01"/>
+                        <path d="M11 12h1v4h1"/>
+                    </svg>
+                </button>
+            </div>
+            <!-- Retrieved-candidates debug panel. Opens when the user
+                 clicks an info affordance next to an agent turn; lists
+                 every candidate the LLM was shown for that turn, with
+                 cover art. Click any row to launch it directly. -->
+            <div id="ai-retrieved-panel" class="ai-retrieved-panel hidden" role="dialog" aria-modal="true" aria-labelledby="ai-retrieved-title">
+                <div class="ai-retrieved-panel__backdrop"></div>
+                <div class="ai-retrieved-panel__box">
+                    <div class="ai-retrieved-panel__header">
+                        <span id="ai-retrieved-title" class="ai-retrieved-panel__title">What the agent saw</span>
+                        <button id="ai-retrieved-close" class="ai-retrieved-panel__close" aria-label="Close">×</button>
+                    </div>
+                    <div id="ai-retrieved-list" class="ai-retrieved-panel__list"></div>
+                </div>
             </div>
             <!-- Recovery button: visible only during "Connecting..." state (.loading).
                  Hides automatically once the game list populates. -->

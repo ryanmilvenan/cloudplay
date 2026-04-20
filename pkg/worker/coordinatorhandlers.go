@@ -156,44 +156,6 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 			goto commonStart
 		}
 
-		// Libretro path — hydrate archived ROMs synchronously before
-		// handing the path to the core. Dreamcast .7z archives contain
-		// a .gdi + track files; flycast reads the .gdi, not the 7z.
-		// Xbox's async hydration pattern (see startXemuRoom) isn't
-		// available here because libretro's app.Load is what sets the
-		// viewport dimensions that commonStart's StartGameResponse
-		// reports. In practice Dreamcast archives (200-900 MB LZMA)
-		// extract in under 10 s on the NFS mount, which fits inside
-		// the coordinator's 10 s RPC timeout. Xbox-style repack
-		// wouldn't — but Xbox doesn't land here, it's the xemu branch.
-		if romcache.NeedsHydration(game.Path) {
-			fullPath := game.FullPath(w.conf.Library.BasePath)
-			c.log.Info().Str("archive", game.Path).
-				Msg("[ROMCACHE] hydrating libretro ROM (sync)")
-			resolved, err := w.hyd.ResolveNoProgress(fullPath)
-			if err != nil {
-				c.log.Error().Err(err).Str("archive", game.Path).
-					Msg("[ROMCACHE] hydrate failed; closing room")
-				r.Close()
-				w.router.SetRoom(nil)
-				return api.EmptyPacket
-			}
-			if rel, relErr := filepath.Rel(w.conf.Library.BasePath, resolved); relErr == nil {
-				game.Path = rel
-			} else {
-				// Fall back to the absolute path — app.Load's FullPath
-				// join with "" base falls through to raw Path.
-				game.Path = resolved
-			}
-			// Refresh the extension so any ext-driven routing downstream
-			// sees the real payload type (e.g. .gdi instead of .7z).
-			if ext := filepath.Ext(resolved); len(ext) > 1 {
-				game.Type = ext[1:]
-			}
-			c.log.Info().Str("resolved", game.Path).
-				Msg("[ROMCACHE] hydration done; proceeding to app.Load")
-		}
-
 		// start the emulator
 		app := room.WithEmulator(w.mana.Get(caged.Libretro))
 		app.ReloadFrontend()
@@ -232,121 +194,186 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 			r.Send(data)
 		})
 
-		w.log.Info().Msgf("Starting the game: %v", gameName)
-		if err := app.Load(game, w.conf.Library.BasePath); err != nil {
-			c.log.Error().Err(err).Msgf("couldn't load the game %v", game)
-			r.Close()
-			w.router.SetRoom(nil)
-			return api.EmptyPacket
-		}
+		// launch performs the full libretro load-and-start sequence for
+		// the given (already-hydrated) game metadata. Factored out so
+		// we can call it either inline (fast path, no archive) or from
+		// a goroutine after hydration (slow path, 7z archive). The
+		// enclosing closure captures app/m/r/w/c/uid/rq/gameName.
+		launch := func(g games.GameMetadata) bool {
+			w.log.Info().Str("game", gameName).Str("path", g.Path).
+				Msg("Starting the game")
+			if err := app.Load(g, w.conf.Library.BasePath); err != nil {
+				c.log.Error().Err(err).Msgf("couldn't load the game %v", g)
+				r.Close()
+				w.router.SetRoom(nil)
+				return false
+			}
 
-		// Kick off rcheevos game-load async — if the user is logged
-		// into RA, rc_client fetches the achievement set for this
-		// ROM's hash. Failures (no credentials, unknown system,
-		// network) are non-fatal; the game still launches.
-		if w.rch != nil {
-			fullPath := game.FullPath(w.conf.Library.BasePath)
-			system := game.System
-			go func() {
-				if err := w.rch.LoadGameFromFile(fullPath, system); err != nil {
-					w.log.Warn().Err(err).Msgf("rcheevos load fail (%s)", system)
+			// Kick off rcheevos game-load async — if the user is logged
+			// into RA, rc_client fetches the achievement set for this
+			// ROM's hash. Failures (no credentials, unknown system,
+			// network) are non-fatal; the game still launches.
+			if w.rch != nil {
+				fullPath := g.FullPath(w.conf.Library.BasePath)
+				system := g.System
+				go func() {
+					if err := w.rch.LoadGameFromFile(fullPath, system); err != nil {
+						w.log.Warn().Err(err).Msgf("rcheevos load fail (%s)", system)
+						return
+					}
+					w.log.Info().Msgf("rcheevos game loaded: %q (%d achievements)", w.rch.GameTitle(), w.rch.AchievementCount())
+				}()
+			}
+
+			m.AudioSrcHz = app.AudioSampleRate()
+			m.AudioFrames = w.conf.Encoder.Audio.Frames
+			m.VideoW, m.VideoH = app.ViewportSize()
+			m.VideoScale = app.Scale()
+
+			r.SetMedia(m)
+
+			if err := m.Init(); err != nil {
+				c.log.Error().Err(err).Msgf("couldn't init the media")
+				r.Close()
+				w.router.SetRoom(nil)
+				return false
+			}
+
+			if app.Flipped() {
+				m.SetVideoFlip(true)
+			}
+			m.SetPixFmt(app.PixFormat())
+			m.SetRot(app.Rotation())
+
+			r.BindAppMedia()
+
+			// BindAppMedia wires the app's data callback to r.Send which
+			// broadcasts to every user in the room. That's wrong for rumble
+			// packets, which are per-port (encoded [0xFF, port, effect, hi, lo])
+			// — every peer was feeling the host's controller rumble. Override
+			// the callback here so rumble goes to every user whose Index
+			// matches the rumbling port; everything else still broadcasts.
+			//
+			// Multiple users can legitimately share a port (e.g. four friends
+			// taking turns controlling player 1 on a single-player game), so
+			// every matching user receives the rumble — the loop does NOT
+			// early-return on first match. When users later stripe into
+			// distinct slots via HandleChangePlayer, each u.Index updates in
+			// place and the rumble naturally follows them.
+			r.App().SetDataCb(func(d []byte) {
+				if len(d) >= 2 && d[0] == 0xFF {
+					targetPort := int(d[1])
+					for u := range w.router.Users().Values() {
+						if u.Index == targetPort {
+							u.SendData(d)
+						}
+					}
 					return
 				}
-				w.log.Info().Msgf("rcheevos game loaded: %q (%d achievements)", w.rch.GameTitle(), w.rch.AchievementCount())
-			}()
+				r.Send(d)
+			})
+
+			// Phase 3: attempt to arm the Vulkan→CUDA→NVENC zero-copy encode path.
+			//
+			// Conditions (all must hold):
+			//   1. config.Encoder.Video.ZeroCopy == true  (explicit opt-in; default false)
+			//   2. codec == "h264_nvenc"
+			//   3. Vulkan HW render context is active and the device supports
+			//      VK_KHR_external_memory_fd (NVIDIA Linux with nvenc build tag)
+			//
+			// If any condition fails, TryArmZeroCopy returns false and the CPU
+			// readback path (already set by BindAppMedia) remains active.
+			//
+			// When armed, ProcessVideo transparently routes frames through
+			// GPU-direct NVENC and falls back to CPU on the rare frames where
+			// the fd is not yet exported (e.g. the very first frame).
+			//
+			// Phase 3c: GPU RGBA→NV12 colour conversion is now implemented via
+			// embedded PTX kernels (BT.601, JIT-compiled).  Falls back to raw
+			// copy if PTX JIT fails (stream stays up, colours may be wrong).
+			backend := app.VideoBackend()
+			zcConfigEnabled := w.conf.Encoder.Video.ZeroCopy
+			zcAvailable := backend != nil && backend.SupportsZeroCopy()
+			backendName := "<nil>"
+			backendKind := "<nil>"
+			if backend != nil {
+				backendName = backend.Name()
+				backendKind = string(backend.Kind())
+			}
+			log.Printf("[cloudplay diag] zero-copy arming check: config.ZeroCopy=%v backend=%s kind=%s SupportsZeroCopy=%v codec=%s",
+				zcConfigEnabled, backendName, backendKind, zcAvailable, w.conf.Encoder.Video.Codec)
+			if zcConfigEnabled && zcAvailable {
+				vw, vh := uint(m.VideoW), uint(m.VideoH)
+				armed := media.TryArmZeroCopy(
+					m,
+					w.conf.Encoder.Video,
+					vw, vh,
+					func(fw, fh uint) (int, uint64, error) { return backend.ZeroCopyFd(fw, fh) },
+					func() error { return backend.WaitFrameReady() },
+					w.log,
+				)
+				log.Printf("[cloudplay diag] zero-copy TryArmZeroCopy returned: armed=%v (dims=%dx%d backend=%s)", armed, vw, vh, backendName)
+			}
+
+			r.StartApp()
+			return true
 		}
 
-		m.AudioSrcHz = app.AudioSampleRate()
-		m.AudioFrames = w.conf.Encoder.Audio.Frames
-		m.VideoW, m.VideoH = app.ViewportSize()
-		m.VideoScale = app.Scale()
-
-		r.SetMedia(m)
-
-		if err := m.Init(); err != nil {
-			c.log.Error().Err(err).Msgf("couldn't init the media")
-			r.Close()
-			w.router.SetRoom(nil)
-			return api.EmptyPacket
+		// Fast path: no hydration needed, launch inline so commonStart's
+		// response carries real viewport dimensions.
+		if !romcache.NeedsHydration(game.Path) {
+			if !launch(game) {
+				return api.EmptyPacket
+			}
+			goto commonStart
 		}
 
-		if app.Flipped() {
-			m.SetVideoFlip(true)
-		}
-		m.SetPixFmt(app.PixFormat())
-		m.SetRot(app.Rotation())
-
-		r.BindAppMedia()
-
-		// BindAppMedia wires the app's data callback to r.Send which
-		// broadcasts to every user in the room. That's wrong for rumble
-		// packets, which are per-port (encoded [0xFF, port, effect, hi, lo])
-		// — every peer was feeling the host's controller rumble. Override
-		// the callback here so rumble goes to every user whose Index
-		// matches the rumbling port; everything else still broadcasts.
-		//
-		// Multiple users can legitimately share a port (e.g. four friends
-		// taking turns controlling player 1 on a single-player game), so
-		// every matching user receives the rumble — the loop does NOT
-		// early-return on first match. When users later stripe into
-		// distinct slots via HandleChangePlayer, each u.Index updates in
-		// place and the rumble naturally follows them.
-		r.App().SetDataCb(func(d []byte) {
-			if len(d) >= 2 && d[0] == 0xFF {
-				targetPort := int(d[1])
-				for u := range w.router.Users().Values() {
-					if u.Index == targetPort {
-						u.SendData(d)
-					}
-				}
+		// Slow path: archived ROM. Return the StartGameResponse to the
+		// coordinator immediately (the room is registered) and do the
+		// extract + load + start in a goroutine. Progress events go
+		// over r.Send — they silently drop for the first second or two
+		// while WebRTC negotiation completes, then light up the same
+		// hydrate overlay the xemu path uses.
+		w.log.Info().Str("game", gameName).Str("archive", game.Path).
+			Msg("[ROMCACHE] libretro room registered; hydrating before launch")
+		progress := func(stage string, percent int, extras string) {
+			data, err := api.Wrap(api.Out{
+				T: uint8(api.RoomHydrateProgress),
+				Payload: api.RoomHydrateProgressResponse{
+					Stage:   stage,
+					Percent: percent,
+					Extras:  extras,
+				},
+			})
+			if err != nil {
+				w.log.Warn().Err(err).Msg("[ROMCACHE] progress wrap failed")
 				return
 			}
-			r.Send(d)
-		})
-
-		// Phase 3: attempt to arm the Vulkan→CUDA→NVENC zero-copy encode path.
-		//
-		// Conditions (all must hold):
-		//   1. config.Encoder.Video.ZeroCopy == true  (explicit opt-in; default false)
-		//   2. codec == "h264_nvenc"
-		//   3. Vulkan HW render context is active and the device supports
-		//      VK_KHR_external_memory_fd (NVIDIA Linux with nvenc build tag)
-		//
-		// If any condition fails, TryArmZeroCopy returns false and the CPU
-		// readback path (already set by BindAppMedia) remains active.
-		//
-		// When armed, ProcessVideo transparently routes frames through
-		// GPU-direct NVENC and falls back to CPU on the rare frames where
-		// the fd is not yet exported (e.g. the very first frame).
-		//
-		// Phase 3c: GPU RGBA→NV12 colour conversion is now implemented via
-		// embedded PTX kernels (BT.601, JIT-compiled).  Falls back to raw
-		// copy if PTX JIT fails (stream stays up, colours may be wrong).
-		backend := app.VideoBackend()
-		zcConfigEnabled := w.conf.Encoder.Video.ZeroCopy
-		zcAvailable := backend != nil && backend.SupportsZeroCopy()
-		backendName := "<nil>"
-		backendKind := "<nil>"
-		if backend != nil {
-			backendName = backend.Name()
-			backendKind = string(backend.Kind())
+			r.Send(data)
 		}
-		log.Printf("[cloudplay diag] zero-copy arming check: config.ZeroCopy=%v backend=%s kind=%s SupportsZeroCopy=%v codec=%s",
-			zcConfigEnabled, backendName, backendKind, zcAvailable, w.conf.Encoder.Video.Codec)
-		if zcConfigEnabled && zcAvailable {
-			vw, vh := uint(m.VideoW), uint(m.VideoH)
-			armed := media.TryArmZeroCopy(
-				m,
-				w.conf.Encoder.Video,
-				vw, vh,
-				func(fw, fh uint) (int, uint64, error) { return backend.ZeroCopyFd(fw, fh) },
-				func() error { return backend.WaitFrameReady() },
-				w.log,
-			)
-			log.Printf("[cloudplay diag] zero-copy TryArmZeroCopy returned: armed=%v (dims=%dx%d backend=%s)", armed, vw, vh, backendName)
-		}
-
-		r.StartApp()
+		go func() {
+			fullPath := game.FullPath(w.conf.Library.BasePath)
+			resolved, err := w.hyd.Resolve(fullPath, progress)
+			if err != nil {
+				w.log.Error().Err(err).Msg("[ROMCACHE] hydrate failed; closing room")
+				r.Close()
+				return
+			}
+			if active := w.router.Room(); active != r {
+				w.log.Warn().Msg("[ROMCACHE] room no longer active after hydrate; abandoning launch")
+				return
+			}
+			g := game
+			if rel, relErr := filepath.Rel(w.conf.Library.BasePath, resolved); relErr == nil {
+				g.Path = rel
+			} else {
+				g.Path = resolved
+			}
+			if ext := filepath.Ext(resolved); len(ext) > 1 {
+				g.Type = ext[1:]
+			}
+			launch(g)
+		}()
 	}
 
 commonStart:

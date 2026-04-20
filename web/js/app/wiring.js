@@ -113,11 +113,11 @@ const onMessage = (m) => {
             break;
         case api.endpoint.GAME_QUIT:
             // Broadcast: active session killed by another user. Reset
-            // everyone to the game list and reinit WebRTC for the next
-            // pick.
+            // everyone to the game list and re-establish WebRTC so the
+            // next pick can launch without a page refresh.
             if (getState().appState === app.state.game || room.id) {
                 message.show('Session ended.');
-                webrtc.stop();
+                webrtc.restart();
                 resetToMenu({reconnect: true});
             }
             break;
@@ -222,14 +222,22 @@ export const initWiring = () => {
     sub(WEBRTC_ICE_CANDIDATES_FLUSH, () => webrtc.flushCandidates());
     sub(WEBRTC_CONNECTION_READY, onConnectionReady);
     sub(WEBRTC_CONNECTION_CLOSED, () => {
-        webrtc.stop();
+        // Rebuild the local peer BEFORE asking the server for a new
+        // offer. A plain webrtc.stop() leaves connection=null, so the
+        // server's SDP answer ends up dropped by `setRemoteDescription`
+        // and the user is stuck until they refresh.
+        webrtc.restart();
         if (getState().appState === app.state.game) {
             resetToMenu({reconnect: true});
         } else if (getState().appState !== app.state.eden && room.id) {
             resetToMenu({reconnect: true});
         } else {
-            // Fresh page load or already at menu: preserve room.id for pending InitSession.
+            // Fresh page load or already at menu: the server will
+            // hand us a new InitSession on its own schedule. Ask for
+            // a fresh WebRTC offer now so the newly-restarted local
+            // peer has something to answer.
             input.retropad.toggle(false);
+            api.server.initWebrtc();
         }
     });
     sub(LATENCY_CHECK_REQUESTED, onLatencyCheck);

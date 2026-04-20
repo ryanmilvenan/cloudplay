@@ -24,18 +24,26 @@
     background: rgba(0,0,0,0.65);
 }
 
-/* Desktop: cog fades in on mouse move, managed by overlay.js via .visible class */
+/* Desktop: in-game the cog fades in on mouse move (overlay.js toggles
+   .visible). Outside a game, overlay.js adds .is-static to pin it open
+   since the menu doesn't compete with gameplay for attention. */
 @media (hover: hover) and (pointer: fine) {
     .overlay-cog {
         opacity: 0;
         pointer-events: none;
         transition: opacity 0.3s;
     }
-    .overlay-cog.visible {
+    .overlay-cog.visible,
+    .overlay-cog.is-static {
         opacity: 1;
         pointer-events: auto;
     }
 }
+
+/* Panel elements tagged .overlay-panel__game-only are collapsed when
+   the panel isn't in in-game mode. Keeps the menu-state panel minimal
+   (just Preferences + Blow on the Cartridge). */
+.overlay-panel:not(.is-in-game) .overlay-panel__game-only { display: none !important; }
 
 /* ── Overlay panel ── */
 .overlay-panel {

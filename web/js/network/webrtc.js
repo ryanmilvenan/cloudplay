@@ -22,10 +22,19 @@ let inputReady = false;
 
 let onData;
 let disconnectTimer = null;
+// Remembered across restarts so a post-game reconnect doesn't need
+// the server to re-send InitSession just to hand back the same ICE
+// list. Populated on every start().
+let savedIce = [];
 
 const start = (iceservers) => {
     log.info('[rtc] <- ICE servers', iceservers);
     const servers = iceservers || [];
+    if (servers.length) savedIce = servers;
+    // Reset handshake bookkeeping — fresh peer, fresh answer/flush state.
+    isAnswered = false;
+    isFlushing = false;
+    candidates = [];
     connection = new RTCPeerConnection({iceServers: servers});
     mediaStream = new MediaStream();
 
@@ -210,6 +219,23 @@ export const webrtc = {
             });
         });
         isFlushing = false;
+    },
+    /**
+     * restart() rebuilds the local RTCPeerConnection using the ICE
+     * list remembered from the last start(). Intended for post-game
+     * reconnects where the previous peer has disconnected but the
+     * coordinator session is still live and will happily hand back a
+     * fresh SDP offer if we ask. Callers should follow up with
+     * `api.server.initWebrtc()` to request that offer.
+     *
+     * Without this, `webrtc.stop()` followed by an `initWebrtc()` call
+     * lands the server's SDP offer on a null connection and the reply
+     * is silently dropped — which is why leaving a game historically
+     * required a full page refresh to start another.
+     */
+    restart: () => {
+        stop();
+        start(savedIce);
     },
     keyboard: (data) => keyboardChannel?.send(data),
     mouse: (data) => mouseChannel?.send(data),

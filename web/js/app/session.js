@@ -5,7 +5,7 @@
 
 import {api} from 'api';
 import {input} from 'input';
-import {webrtc} from 'network';
+import {socket, webrtc} from 'network';
 import {debounce} from 'utils';
 import {log} from 'log';
 
@@ -167,6 +167,23 @@ overlay.onAudio = () => {
     if (!willMute) stream.play();
     setState({interacted: true});
     overlay.setAudioMuted(video.muted);
+};
+
+// "Blow on the Cartridge" — full session reset when either the local
+// WebRTC or the remote worker has gone sideways and the usual
+// auto-reconnect can't recover. Tears down WebSocket + WebRTC locally
+// and reopens the WebSocket, which forces the coordinator to rebind
+// us to whatever worker is currently healthy (not the dead one we
+// might be pointing at) and send a fresh InitSession.
+overlay.onBlowOnCartridge = () => {
+    log.info('[control] blow-on-the-cartridge — hard session reset');
+    message.show('Blowing on the cartridge…');
+    overlay.disable();
+    input.retropad.toggle(false);
+    room.reset();
+    webrtc.stop();
+    socket.reopen();
+    showMenuScreen();
 };
 
 export const onLatencyCheck = async (data) => {

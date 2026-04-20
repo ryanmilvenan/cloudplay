@@ -21,11 +21,15 @@ const saveBtn = document.getElementById('overlay-save');
 const loadBtn = document.getElementById('overlay-load');
 const resetBtn = document.getElementById('overlay-reset');
 const leaveBtn = document.getElementById('overlay-leave');
+const blowBtn = document.getElementById('overlay-blow-on-cartridge');
 
 let backdropEl = null;
 
 let isOpen = false;
-let enabled = false; // only active in game state
+// Is a game currently running? Only toggles the panel's in-game sections
+// (players, save/load, reset, leave). The cog itself is always visible
+// so "Blow on the Cartridge" + Preferences are reachable in menu too.
+let inGame = false;
 
 // Desktop: mouse idle timer
 let mouseIdleTimer = null;
@@ -44,6 +48,7 @@ let onLoad = () => {};
 let onReset = () => {};
 let onLeave = () => {};
 let onAudio = () => {};
+let onBlowOnCartridge = () => {};
 
 const createBackdrop = () => {
     if (backdropEl) return backdropEl;
@@ -147,12 +152,15 @@ const updateSlots = () => {
 
 // Re-render whenever currentSlot or roomMembers changes in the store.
 // We're coarse on purpose — updateSlots is idempotent and cheap.
-subscribe(() => { if (isOpen || enabled) updateSlots(); });
+subscribe(() => { if (isOpen || inGame) updateSlots(); });
 
 // ── Desktop mouse-move overlay bar ──
 // We reuse the cog/panel approach but auto-show on mouse move on desktop
+// when a game is active. Outside a game the cog is always visible (no
+// need to hide-and-reveal on movement since the menu doesn't compete
+// for attention with streaming gameplay).
 const onMouseMove = () => {
-    if (!enabled) return;
+    if (!inGame) return;
     if (isMobile()) return;
 
     cogEl.classList.add('visible');
@@ -193,6 +201,13 @@ saveBtn.addEventListener('click', () => onSave());
 loadBtn.addEventListener('click', () => onLoad());
 resetBtn.addEventListener('click', () => onReset());
 leaveBtn.addEventListener('click', () => onLeave());
+blowBtn.addEventListener('click', () => {
+    // Closes the panel immediately so the click visually "takes" before
+    // the teardown runs; the reset itself is slow-ish (WebSocket close
+    // + reopen + InitSession) and we don't want a stuck-looking panel.
+    close();
+    onBlowOnCartridge();
+});
 
 // The audio button's click handler MUST call video.play() / muted=false
 // directly inside this handler — Safari requires the user-gesture chain
@@ -214,19 +229,35 @@ document.getElementById('gamebody').addEventListener('mousemove', onMouseMove);
  * Overlay module export.
  */
 export const overlay = {
-    /** Enable overlay (call when entering game state) */
+    /**
+     * enable() — call when entering game state. Reveals the in-game
+     * sections (players, save/load, reset, leave) and the desktop
+     * mouse-idle cog behaviour. The cog itself is always visible; this
+     * just flips the panel into "in-game" mode.
+     */
     enable() {
-        enabled = true;
-        cogEl.classList.remove('hidden');
+        inGame = true;
+        panelEl.classList.add('is-in-game');
+        // In-game on desktop: cog hides until mouse moves, managed by
+        // onMouseMove below. On mobile the cog is always visible per CSS.
+        cogEl.classList.remove('is-static');
         if (isMobile()) {
             cogEl.classList.add('visible');
         }
     },
-    /** Disable overlay (call when leaving game state) */
+    /**
+     * disable() — call when leaving game state. Hides the in-game
+     * sections so only the universal actions (Preferences, Blow on the
+     * Cartridge) remain in the panel. The cog stays available.
+     */
     disable() {
-        enabled = false;
-        cogEl.classList.add('hidden');
+        inGame = false;
+        panelEl.classList.remove('is-in-game');
         cogEl.classList.remove('visible');
+        // Pin cog open in menu state so "Blow on the Cartridge" is
+        // reachable whenever nothing is streaming — in-game attention
+        // auto-hide doesn't make sense when there's no game.
+        cogEl.classList.add('is-static');
         close();
         clearTimeout(mouseIdleTimer);
     },
@@ -243,6 +274,7 @@ export const overlay = {
     set onReset(fn) { onReset = fn; },
     set onLeave(fn) { onLeave = fn; },
     set onAudio(fn) { onAudio = fn; },
+    set onBlowOnCartridge(fn) { onBlowOnCartridge = fn; },
     /** Update audio-button label to reflect current muted state. */
     setAudioMuted(muted) {
         audioBtn.textContent = muted ? '🔊 Enable Audio' : '🔇 Mute Audio';

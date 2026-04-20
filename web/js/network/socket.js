@@ -5,6 +5,9 @@ import {
 import {log} from 'log';
 
 let conn;
+// Remember the last init params so reopen() can reconnect without the
+// caller having to thread them through again. Populated on every init().
+let lastParams = null;
 
 const buildUrl = (params = {}) => {
     const url = new URL(window.location);
@@ -17,6 +20,7 @@ const buildUrl = (params = {}) => {
 }
 
 const init = (roomId, wid, zone) => {
+    lastParams = {roomId, wid, zone};
     let objParams = {room_id: roomId, zone: zone};
     if (wid) objParams.wid = wid;
     const url = buildUrl(objParams)
@@ -34,8 +38,26 @@ const init = (roomId, wid, zone) => {
     };
 };
 
+const close = () => {
+    if (conn && conn.readyState !== WebSocket.CLOSED) {
+        try { conn.close(1000, 'client reset'); } catch (e) { /* ignore */ }
+    }
+    conn = null;
+};
+
+// reopen — used by the "Blow on the cartridge" reset path. Tears the
+// existing socket down and re-initialises with the last parameters, so
+// the coordinator issues a fresh InitSession and rebinds the user to
+// whatever worker is currently healthy (instead of the dead one we may
+// be pointing at).
+const reopen = () => {
+    const params = lastParams || {};
+    close();
+    init(params.roomId, params.wid, params.zone);
+};
+
 const send = (data) => {
-    if (conn.readyState === 1) {
+    if (conn && conn.readyState === 1) {
         conn.send(JSON.stringify(data));
     }
 }
@@ -47,5 +69,7 @@ const send = (data) => {
  */
 export const socket = {
     init,
-    send
+    send,
+    close,
+    reopen,
 }

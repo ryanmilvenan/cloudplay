@@ -133,16 +133,20 @@
         <div id="game-list-container" style="display:none"></div>
     </div>
 
-    <!-- Overlay cog (shown only in-game on mobile) -->
-    <div id="overlay-cog" class="overlay-cog hidden">⚙</div>
+    <!-- Overlay cog — always visible. In-game reveals the full panel
+         (players, save/load, reset, leave). Outside a game it shows
+         just the universal actions (preferences, blow on the cartridge). -->
+    <div id="overlay-cog" class="overlay-cog">⚙</div>
 
-    <!-- Overlay panel -->
+    <!-- Overlay panel. Elements tagged .overlay-panel__game-only are
+         hidden by CSS when the panel isn't in game mode (see
+         .overlay-panel.is-in-game rules in main.css). -->
     <div id="overlay-panel" class="overlay-panel hidden">
         <div class="overlay-panel__header">
             <span id="overlay-game-title" class="overlay-game-title">—</span>
-            <span class="overlay-running-dot">● Running</span>
+            <span class="overlay-running-dot overlay-panel__game-only">● Running</span>
         </div>
-        <div class="overlay-panel__section">
+        <div class="overlay-panel__section overlay-panel__game-only">
             <div class="overlay-section-label">Players</div>
             <div id="overlay-players" class="overlay-players">
                 <button class="overlay-player-slot" data-slot="0"><span class="slot-label">P1</span> <span class="slot-status">○</span></button>
@@ -154,13 +158,17 @@
             </div>
         </div>
         <div class="overlay-panel__actions">
-            <button id="overlay-audio" class="overlay-btn">🔊 Enable Audio</button>
-            <button id="overlay-invite" class="overlay-btn">Invite Friends</button>
+            <button id="overlay-audio" class="overlay-btn overlay-panel__game-only">🔊 Enable Audio</button>
+            <button id="overlay-invite" class="overlay-btn overlay-panel__game-only">Invite Friends</button>
             <button id="overlay-user-settings" class="overlay-btn">⚙ Preferences</button>
-            <button id="overlay-save" class="overlay-btn">Save</button>
-            <button id="overlay-load" class="overlay-btn">Load</button>
-            <button id="overlay-reset" class="overlay-btn overlay-btn--warn">Reset Game</button>
-            <button id="overlay-leave" class="overlay-btn overlay-btn--danger">Leave Game</button>
+            <button id="overlay-save" class="overlay-btn overlay-panel__game-only">Save</button>
+            <button id="overlay-load" class="overlay-btn overlay-panel__game-only">Load</button>
+            <button id="overlay-reset" class="overlay-btn overlay-btn--warn overlay-panel__game-only">Reset Game</button>
+            <button id="overlay-leave" class="overlay-btn overlay-btn--danger overlay-panel__game-only">Leave Game</button>
+            <!-- Universal escape hatch: full session reset when the stream
+                 won't wake up or the worker has gone sideways. Named after
+                 the NES cartridge-cleaning ritual because the vibes map. -->
+            <button id="overlay-blow-on-cartridge" class="overlay-btn overlay-btn--warn">🫁 Blow on the Cartridge</button>
         </div>
     </div>
 

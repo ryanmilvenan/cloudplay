@@ -100,3 +100,11 @@ vendor/xemu/
 ### the worker. Never commit.
 /secrets/
 *.env
+
+### BIOS / emulator artifacts kept locally as recovery material after
+### we lost them once to a stray rsync --delete. Copyrighted, never
+### published. Canonical backup lives on moon's NAS at
+### /var/mnt/data/media/games/.backups/cloudplay/.
+Xbox-Emulator-Files.zip
+SCPH-*.bin
+mcpx_*.bin

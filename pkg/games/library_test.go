@@ -65,6 +65,74 @@ func TestLibraryScan(t *testing.T) {
 	}
 }
 
+// TestScanSuppressesDiscImageTracks pins the fix for Seaman and every other
+// CUE+BIN / GDI+BIN archive that extracts into a dir full of track files:
+// only the .cue / .gdi manifest should surface as a library entry, not each
+// individual track. Regression-guards against the pre-fix behaviour where
+// "Seaman (USA) (Track 1).bin" etc. appeared as separate PS2 entries
+// because PS2's rom list includes .bin.
+func TestScanSuppressesDiscImageTracks(t *testing.T) {
+	root := t.TempDir()
+	dc := filepath.Join(root, "dreamcast", "Seaman (USA)")
+	if err := os.MkdirAll(dc, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for _, n := range []string{
+		"Seaman (USA).cue",
+		"Seaman (USA) (Track 1).bin",
+		"Seaman (USA) (Track 2).bin",
+		"Seaman (USA) (Track 3).bin",
+	} {
+		if err := os.WriteFile(filepath.Join(dc, n), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", n, err)
+		}
+	}
+	// Safety: a dir with ONLY .bin files (no manifest) must still scan —
+	// some cores distribute as lone .bin.
+	lonely := filepath.Join(root, "ps2")
+	if err := os.MkdirAll(lonely, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lonely, "Solo Title.bin"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write solo: %v", err)
+	}
+
+	emuConf := config.Emulator{Libretro: config.LibretroConfig{}}
+	emuConf.Libretro.Cores.List = map[string]config.LibretroCoreConfig{
+		"dreamcast": {Folder: "dreamcast", Roms: []string{"cue", "gdi"}},
+		"ps2":       {Folder: "ps2", Roms: []string{"iso", "bin"}},
+	}
+
+	l := logger.NewConsole(false, "w", false)
+	lib := NewLib(config.Library{
+		BasePath:  root,
+		Supported: []string{"cue", "gdi", "bin"},
+	}, emuConf, l)
+	lib.Scan()
+	games := lib.GetAll()
+
+	var cueCount, trackCount, soloCount int
+	for _, g := range games {
+		switch {
+		case g.Name == "Seaman (USA)" && g.Type == "cue":
+			cueCount++
+		case g.Type == "bin" && g.System == "dreamcast":
+			trackCount++
+		case g.Type == "bin" && g.Name == "Solo Title":
+			soloCount++
+		}
+	}
+	if cueCount != 1 {
+		t.Errorf("expected 1 .cue entry for Seaman, got %d (all=%+v)", cueCount, games)
+	}
+	if trackCount != 0 {
+		t.Errorf("expected 0 track .bin entries under dreamcast/, got %d", trackCount)
+	}
+	if soloCount != 1 {
+		t.Errorf("expected lone .bin outside a disc-image dir to still scan, got %d", soloCount)
+	}
+}
+
 func TestAliasFileMaybe(t *testing.T) {
 	lib := &library{
 		config: libConf{

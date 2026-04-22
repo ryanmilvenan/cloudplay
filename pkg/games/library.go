@@ -233,6 +233,12 @@ func (lib *library) Scan() {
 	start := time.Now()
 	var games []GameMetadata
 	dir := lib.config.path
+	// Per-directory cache for isDiscImageDir — a CUE/GDI dump extracts
+	// into a dir holding the manifest plus many track files (.bin/.raw).
+	// Without this skip, every track file surfaces as a separate "game"
+	// in the library: junk entries like "Seaman (USA) (Track 1)" mis-tagged
+	// ps2 because PS2's rom list includes .bin and no other core claims it.
+	discImageDir := map[string]bool{}
 	err := filepath.WalkDir(dir, func(path string, info fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -249,6 +255,13 @@ func (lib *library) Scan() {
 		}
 
 		if info == nil || info.IsDir() || !lib.isExtAllowed(path) {
+			return nil
+		}
+
+		// Suppress track files that belong to a CUE/GDI disc dump.
+		// Only the .cue / .gdi manifest is user-facing; the individual
+		// track files it references are implementation detail.
+		if isTrackExt(path) && lib.isDiscImageDir(filepath.Dir(path), discImageDir) {
 			return nil
 		}
 
@@ -384,6 +397,44 @@ func (lib *library) isExtAllowed(path string) bool {
 	}
 	_, ok := lib.config.supported[ext[1:]]
 	return ok
+}
+
+// isTrackExt is true for file extensions that exclusively appear as
+// tracks inside a CUE/GDI multi-file disc dump. `.iso` is deliberately
+// NOT in this list — some platforms (PS2, GC) distribute whole games
+// as lone .isos that must still be picked up as library entries.
+func isTrackExt(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".bin", ".raw":
+		return true
+	}
+	return false
+}
+
+// isDiscImageDir reports whether dir contains a .cue or .gdi manifest.
+// Result is cached in the supplied map so a dir with many tracks is
+// probed once per scan.
+func (lib *library) isDiscImageDir(dir string, cache map[string]bool) bool {
+	if v, ok := cache[dir]; ok {
+		return v
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		cache[dir] = false
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(e.Name()))
+		if ext == ".cue" || ext == ".gdi" {
+			cache[dir] = true
+			return true
+		}
+	}
+	cache[dir] = false
+	return false
 }
 
 // metadata returns game info from a path

@@ -10,6 +10,11 @@ type (
 		Record      bool   `json:"record,omitempty"`
 		RecordUser  string `json:"record_user,omitempty"`
 		PlayerIndex int    `json:"player_index"`
+		// Backend, when non-empty, overrides the library-scan backend for
+		// this one launch. Frontend sets it from a URL query param so
+		// testers can A/B libretro-DC vs flycast native without flipping
+		// server config. Empty = use the scan-time default.
+		Backend string `json:"backend,omitempty"`
 	}
 	GameStartUserResponse struct {
 		RoomId  string        `json:"roomId"`

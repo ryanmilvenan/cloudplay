@@ -28,6 +28,7 @@ func (w *Worker) StartGame(id string, req api.GameStartUserRequest) (*api.StartG
 			PlayerIndex:  req.PlayerIndex,
 			Record:       req.Record,
 			RecordUser:   req.RecordUser,
+			Backend:      req.Backend,
 		}))
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/games"
 	"github.com/giongto35/cloud-game/v3/pkg/network/webrtc"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged"
+	flycastcage "github.com/giongto35/cloud-game/v3/pkg/worker/caged/flycast"
 	xemucage "github.com/giongto35/cloud-game/v3/pkg/worker/caged/xemu"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/media"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/romcache"
@@ -139,16 +140,40 @@ func (c *coordinator) HandleGameStart(rq api.StartGameRequest, w *Worker) api.Ou
 		}
 
 		w.router.SetRoom(r)
-		c.log.Info().Str("room", r.Id()).Str("game", game.Name).Str("backend", game.Backend).Msg("New room")
 
-		// Phase 6 backend dispatch. The libretro path below is the
-		// original code unchanged; the xemu path early-returns after
-		// setting up its simpler pipeline (no save states, no cloud
-		// storage, no recording, no Vulkan zero-copy — all libretro-
-		// specific features that don't apply).
-		if game.Backend == "xemu" {
+		// Per-launch backend override. When the browser appends
+		// ?backend=<modname> to the game launch URL, it flows through
+		// GameStartUserRequest.Backend → StartGameRequest.Backend and wins
+		// over the library-scan GameMetadata.Backend here. Empty = use the
+		// scan-time default (which itself honored env-var overrides during
+		// library scan). Enables A/B-testing libretro-DC vs flycast native
+		// without editing config.yaml.
+		effectiveBackend := game.Backend
+		if rq.Backend != "" {
+			effectiveBackend = rq.Backend
+			c.log.Info().Str("system", game.System).Str("from", game.Backend).
+				Str("to", rq.Backend).Msg("per-launch backend override")
+		}
+		c.log.Info().Str("room", r.Id()).Str("game", game.Name).
+			Str("backend", effectiveBackend).Msg("New room")
+
+		// Native-process backends (xemu, flycast) each early-return after
+		// setting up their simpler pipeline — no save states, no cloud
+		// storage, no recording, no Vulkan zero-copy, all libretro-
+		// specific features that don't apply. The default branch runs the
+		// full libretro path below.
+		switch effectiveBackend {
+		case "xemu":
 			if err := c.startXemuRoom(w, r, game); err != nil {
 				c.log.Error().Err(err).Msg("xemu room start failed")
+				r.Close()
+				w.router.SetRoom(nil)
+				return api.EmptyPacket
+			}
+			goto commonStart
+		case "flycast":
+			if err := c.startFlycastRoom(w, r, game); err != nil {
+				c.log.Error().Err(err).Msg("flycast room start failed")
 				r.Close()
 				w.router.SetRoom(nil)
 				return api.EmptyPacket
@@ -412,6 +437,14 @@ commonStart:
 		_ = s.AddChannel("keyboard", func(data []byte) { r.App().Input(user.Index, byte(caged.Keyboard), data) })
 		_ = s.AddChannel("mouse", func(data []byte) { r.App().Input(user.Index, byte(caged.Mouse), data) })
 	}
+	// Microphone uplink is always offered; adapters that don't consume it
+	// (libretro, xemu) silently no-op on the Input callback. The browser
+	// only opens this channel when the user enables mic capture in the
+	// cog-menu toggle, so unused sessions pay zero overhead beyond the DC
+	// establishment.
+	_ = s.AddChannel("microphone", func(data []byte) {
+		r.App().Input(user.Index, byte(caged.Microphone), data)
+	})
 
 	c.RegisterRoom(r.Id())
 
@@ -639,6 +672,90 @@ func (c *coordinator) startXemuRoom(w *Worker, r *room.Room[*room.GameSession], 
 type xemuStartErr struct{ what string }
 
 func (e *xemuStartErr) Error() string { return e.what }
+
+// startFlycastRoom mirrors startXemuRoom for Dreamcast on the flycast native
+// backend. The two share so much machinery (ffmpeg x11grab pipeline, pixel
+// format routing, app-singleton lifecycle, romcache hydration) that the
+// flycast path is an almost-byte-for-byte copy — a generalization is
+// warranted only if a third native backend lands. Differences today:
+//
+//   - Cage type: *flycastcage.Caged, reached via caged.Flycast
+//   - Rom setter: SetRom (Dreamcast ROMs aren't "DVDs" in the xemu sense).
+//   - Viewport/aspect/sample-rate are identical (48 kHz, 4:3, 640x480)
+//     so the media pipe setup is literally the same.
+func (c *coordinator) startFlycastRoom(w *Worker, r *room.Room[*room.GameSession], game games.GameMetadata) error {
+	appIface := w.mana.Get(caged.Flycast)
+	if appIface == nil {
+		return &flycastStartErr{what: "flycast backend not loaded (flycast.enabled=false?)"}
+	}
+	fcage, ok := appIface.(*flycastcage.Caged)
+	if !ok {
+		return &flycastStartErr{what: "mana.Get(Flycast) returned unexpected type"}
+	}
+	romPath := filepath.Join(w.conf.Library.BasePath, game.Path)
+	r.SetApp(appIface)
+
+	m := media.NewWebRtcMediaPipe(w.conf.Encoder.Audio, w.conf.Encoder.Video, w.log)
+	m.AudioSrcHz = appIface.AudioSampleRate()
+	m.AudioFrames = w.conf.Encoder.Audio.Frames
+	m.VideoW, m.VideoH = appIface.ViewportSize()
+	m.VideoScale = appIface.Scale()
+	r.SetMedia(m)
+	if err := m.Init(); err != nil {
+		return err
+	}
+	// Matches the xemu path: x11grab's rgba frames map to the ABGR pixfmt,
+	// already top-down, no vertical flip required.
+	m.SetPixFmt(4)
+	r.BindAppMedia()
+	appIface.SetDataCb(r.Send)
+
+	if !romcache.NeedsHydration(romPath) {
+		fcage.SetRom(romPath)
+		w.log.Info().Str("game", game.Name).Str("rom", game.Path).Msg("flycast room ready")
+		r.StartApp()
+		return nil
+	}
+
+	w.log.Info().Str("game", game.Name).Str("archive", game.Path).
+		Msg("[ROMCACHE] room registered; hydrating before launch")
+	progress := func(stage string, percent int, extras string) {
+		data, err := api.Wrap(api.Out{
+			T: uint8(api.RoomHydrateProgress),
+			Payload: api.RoomHydrateProgressResponse{
+				Stage:   stage,
+				Percent: percent,
+				Extras:  extras,
+			},
+		})
+		if err != nil {
+			w.log.Warn().Err(err).Msg("[ROMCACHE] progress wrap failed")
+			return
+		}
+		r.Send(data)
+	}
+	go func() {
+		resolved, err := w.hyd.Resolve(romPath, progress)
+		if err != nil {
+			w.log.Error().Err(err).Msg("[ROMCACHE] hydrate failed; closing room")
+			r.Close()
+			return
+		}
+		if active := w.router.Room(); active != r {
+			w.log.Warn().Msg("[ROMCACHE] room no longer active after hydrate; abandoning launch")
+			return
+		}
+		fcage.SetRom(resolved)
+		w.log.Info().Str("game", game.Name).Str("rom", resolved).
+			Msg("flycast room ready (post-hydration)")
+		r.StartApp()
+	}()
+	return nil
+}
+
+type flycastStartErr struct{ what string }
+
+func (e *flycastStartErr) Error() string { return e.what }
 
 func firstN(s string, n int) string {
 	if len(s) <= n {

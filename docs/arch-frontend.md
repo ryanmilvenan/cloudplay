@@ -46,7 +46,8 @@ flowchart TB
 
     subgraph network["network/"]
         socket["socket.js"]
-        webrtc["webrtc.js"]
+        webrtc["webrtc.js<br/>DC: keyboard · mouse · microphone · input"]
+        micmod["microphone.js + worklet<br/>getUserMedia → resample → DC"]
     end
 
     api["api.js"]
@@ -98,6 +99,8 @@ flowchart TB
     session -.-> room
     session -.-> workerManager
     session -.-> recording
+    session -.-> micmod
+    micmod -.-> webrtc
     lifecycle -.-> overlay
     lifecycle -.-> gameList
     lifecycle -.-> menu
@@ -130,3 +133,4 @@ Server ── msg ──▶ socket ── pub MESSAGE ──▶ wiring.onMessage
 - **`setState(patch)` and `setAppState(...)` are the only sanctioned writers** of cross-module state. Direct mutation of `getState()` is a bug.
 - **Circular imports** between `lifecycle ↔ session ↔ keys` are load-safe because every circular reference is called at runtime, not at module init. Adding a top-level expression that evaluates one of these bindings immediately is a footgun — put it inside a function.
 - **`?v=__V__` placeholder** in every import gets stamped by `scripts/version.sh` at deploy time (`/deploy-cloudplay-frontend`). No per-file manual bumps.
+- **Microphone uplink is opt-in** via settings (`opts.ENABLE_MICROPHONE`) and only runs while a game session is active. `mic.start()` is called from `session.startGame` after `api.game.start(...)`, `mic.stop()` from every session-teardown path (`resetToMenu`, `overlay.onLeave`, `overlay.onBlowOnCartridge`). `getUserMedia` is never invoked when the setting is off, so a disabled mic never prompts the user. PCM lands on the `"microphone"` WebRTC data channel, which the worker wires to `app.App.Input(port, device=InputMicrophone, pcm)` — only native-process adapters (flycast) actually deliver it to an emulator.

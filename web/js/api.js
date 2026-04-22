@@ -343,13 +343,19 @@ export const api = {
         reset: (roomId) => packet(endpoints.GAME_RESET, {room_id: roomId}),
         save: () => packet(endpoints.GAME_SAVE),
         setPlayerIndex: (i) => packet(endpoints.GAME_SET_PLAYER_INDEX, i),
-        start: (game, roomId, record, recordUser, player) => packet(endpoints.GAME_START, {
-            game_name: game,
-            room_id: roomId,
-            player_index: player,
-            record: record,
-            record_user: recordUser,
-        }),
+        start: (game, roomId, record, recordUser, player, backend) => {
+            const payload = {
+                game_name: game,
+                room_id: roomId,
+                player_index: player,
+                record: record,
+                record_user: recordUser,
+            };
+            // Per-launch backend override (e.g. `?backend=flycast`). Empty →
+            // worker uses the library-scan default. Trimmed server-side too.
+            if (backend) payload.backend = backend;
+            packet(endpoints.GAME_START, payload);
+        },
         toggleRecording: (active = false, userName = '') =>
             packet(endpoints.GAME_RECORDING, {active: active, user: userName}),
         quit: (roomId) => packet(endpoints.GAME_QUIT, {room_id: roomId}),

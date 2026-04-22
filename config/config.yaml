@@ -352,6 +352,34 @@ xemu:
   width: 640
   height: 480
 
+# Native (non-libretro) emulator backend — flycast (Sega Dreamcast).
+# Standalone flycast has microphone support; the libretro flycast core does
+# not expose RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE. This backend
+# sidesteps that limitation, with the side-benefit of unifying the
+# "emulator-as-native-process" pattern with xemu.
+#
+# Disabled by default. Enable per-host once the flycast binary is installed
+# and verified against a representative DC ROM. The dreamcast system's
+# config.yaml `backend:` field (or a per-launch override) selects between
+# libretro flycast and this native backend; see pkg/config/emulator.go.
+flycast:
+  enabled: false
+  binaryPath: /usr/local/bin/flycast
+  biosPath: /flycast-bios
+  configDir: /home/cloudretro/.config/flycast
+  xvfbDisplay: ':110'
+  width: 640
+  height: 480
+  # Microphone uplink for Seaman. Requires audioCapture=true (mic uses the
+  # same per-session PipeWire instance). micDeviceId is flycast's maple
+  # expansion device ID for Microphone; 3 matches the commonly-reported
+  # value but verify against the running flycast build if mic bindings
+  # silently fail.
+  mic: false
+  micSourceName: cloudplay-mic
+  micRate: 11025
+  micDeviceId: 3
+
 # IGDB per-game metadata enrichment (Phase 2 of the search-and-AI
 # rework). Populates genre / year / franchise / summary / cover URL on
 # each GameMetadata so the frontend can render richer game cards and

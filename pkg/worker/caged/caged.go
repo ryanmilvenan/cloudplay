@@ -7,6 +7,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/config"
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/app"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/flycast"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/libretro"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/xemu"
 )
@@ -20,6 +21,10 @@ const (
 	RetroPad = libretro.RetroPad
 	Keyboard = libretro.Keyboard
 	Mouse    = libretro.Mouse
+	// Microphone routes uplink PCM to the adapter's Input callback. Only
+	// native-process adapters (flycast for Dreamcast/Seaman) actually
+	// consume it; libretro and xemu silently ignore it.
+	Microphone = app.InputMicrophone
 )
 
 type ModName string
@@ -27,6 +32,7 @@ type ModName string
 const (
 	Libretro ModName = "libretro"
 	Xemu     ModName = "xemu"
+	Flycast  ModName = "flycast"
 )
 
 func NewManager(log *logger.Logger) *Manager {
@@ -49,8 +55,34 @@ func (m *Manager) Load(name ModName, conf any) error {
 			return err
 		}
 		m.list[name] = caged
+	case Flycast:
+		caged, err := m.loadFlycast(conf)
+		if err != nil {
+			return err
+		}
+		m.list[name] = caged
 	}
 	return nil
+}
+
+func (m *Manager) loadFlycast(conf any) (*flycast.Caged, error) {
+	s := reflect.ValueOf(conf)
+	f := s.FieldByName("Flycast")
+	if !f.IsValid() {
+		return nil, errors.New("no flycast conf")
+	}
+	fc, ok := f.Interface().(config.FlycastConfig)
+	if !ok {
+		return nil, errors.New("flycast conf wrong type")
+	}
+	if !fc.Enabled {
+		return nil, errors.New("flycast backend disabled in config")
+	}
+	caged := flycast.Cage(flycast.CagedConf{Flycast: fc}, m.log)
+	if err := caged.Init(); err != nil {
+		return nil, err
+	}
+	return &caged, nil
 }
 
 func (m *Manager) loadXemu(conf any) (*xemu.Caged, error) {

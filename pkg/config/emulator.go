@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"os"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -144,10 +145,25 @@ func (e Emulator) SessionStoragePath() string {
 }
 
 // GetBackend returns the caged.ModName backend (as a lowercase string) that
-// should handle the given system. Defaults to "libretro" if the system
-// isn't in the libretro core list or if its Backend field is empty — so
-// every existing core keeps dispatching to libretro without edits.
+// should handle the given system. Resolution order:
+//
+//  1. CLOUDPLAY_BACKEND_<SYSTEM> env var (deploy-wide override; e.g.
+//     CLOUDPLAY_BACKEND_DREAMCAST=flycast forces every Dreamcast launch to
+//     the flycast native adapter without editing config.yaml).
+//  2. `backend:` field on the system's entry in libretro.cores.list.
+//  3. Defaults to "libretro" so every unedited system keeps dispatching
+//     through the libretro path.
+//
+// A per-launch query-param override from the browser (plumbed through
+// api.StartGameRequest.Backend) wins over all three at dispatch time; see
+// HandleGameStart.
 func (e Emulator) GetBackend(system string) string {
+	if system != "" {
+		envKey := "CLOUDPLAY_BACKEND_" + strings.ToUpper(system)
+		if v := os.Getenv(envKey); v != "" {
+			return v
+		}
+	}
 	if core, ok := e.Libretro.Cores.List[system]; ok && core.Backend != "" {
 		return core.Backend
 	}

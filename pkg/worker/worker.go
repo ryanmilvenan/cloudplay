@@ -71,6 +71,12 @@ func New(conf config.WorkerConfig, log *logger.Logger) (*Worker, error) {
 	if err := manager.Load(caged.Xemu, conf); err != nil {
 		log.Warn().Err(err).Msg("xemu backend unavailable — xbox games will fail to start")
 	}
+	// Flycast native backend is best-effort like xemu: disabled-by-default in
+	// config so unaffected deploys keep libretro-DC. When enabled, a start
+	// failure logs but does NOT abort worker startup.
+	if err := manager.Load(caged.Flycast, conf); err != nil {
+		log.Warn().Err(err).Msg("flycast native backend unavailable — backend=flycast games will fail to start")
+	}
 
 	library := games.NewLib(conf.Library, conf.Emulator, log)
 

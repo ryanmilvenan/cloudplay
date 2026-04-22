@@ -23,6 +23,7 @@ export const opts = {
     MIRROR_SCREEN: 'mirror.screen',
     VOLUME: 'volume',
     FORCE_FULLSCREEN: 'force.fullscreen',
+    ENABLE_MICROPHONE: 'enable.microphone',
 }
 
 
@@ -516,6 +517,14 @@ const render = function () {
                 _option(data).withName('Force fullscreen')
                     .withDescription(
                         'Whether games should open in full-screen mode after starting up (excluding mobile devices)'
+                    )
+                    .add(gui.checkbox(k, onChange, value, 'Enabled', 'settings__option-checkbox'))
+                    .build()
+                break;
+            case opts.ENABLE_MICROPHONE:
+                _option(data).withName('Enable microphone')
+                    .withDescription(
+                        'Allow games that support microphone input (e.g. Seaman on Dreamcast). Your browser will prompt for mic permission the first time you start a game. Off by default — audio is never captured unless this is enabled.'
                     )
                     .add(gui.checkbox(k, onChange, value, 'Enabled', 'settings__option-checkbox'))
                     .build()

@@ -22,7 +22,7 @@ flowchart TB
             room["pkg/worker/room<br/>GameSession · broadcastRoomMembers<br/>cast.go: WithEmulator / IsLibretro"]
             coordh["pkg/worker/coordinatorhandlers.go<br/>HandleGameStart → dispatch by game.Backend"]
             media["pkg/worker/media<br/>pipe: core frame → encoder → WebRTC"]
-            caged["pkg/worker/caged<br/>backend registry (Manager)<br/>Load(Libretro) + Load(Xemu) at startup"]
+            caged["pkg/worker/caged<br/>backend registry (Manager)<br/>Load(Libretro) + Load(Xemu) + Load(Flycast) at startup"]
             recorder["pkg/worker/recorder"]
             cloud["pkg/worker/cloud (saves)"]
         end
@@ -32,12 +32,20 @@ flowchart TB
             manager["manager<br/>core discovery"]
             thread["thread<br/>main-thread pinning"]
         end
+        subgraph nativeemu["pkg/worker/caged/nativeemu (shared native-emu scaffolding)"]
+            neproc["process.go<br/>generic Cmd supervisor"]
+            nexvfb["xvfb.go<br/>virtual X display"]
+            nevideo["videocap.go<br/>ffmpeg x11grab → app.Video"]
+            neaudio["audiocap.go · pipewire.go<br/>per-session pipewire + parec → app.Audio"]
+            nepad["virtualpad.go<br/>pure-Go uinput Xbox-360 pad<br/>RetroPad wire → EV_KEY/EV_ABS"]
+        end
         subgraph xemu["pkg/worker/caged/xemu"]
-            xcaged["caged.go<br/>app.App impl<br/>stub emitter → real frames on first x11grab frame"]
-            xproc["process.go · xvfb.go<br/>xemu + Xvfb lifecycle (Phase 2)"]
-            xvideo["videocap.go<br/>ffmpeg x11grab pipe<br/>Xvfb → rawvideo RGBA → app.Video at 60 fps"]
-            xaudio["audiocap.go · pipewire.go<br/>private pipewire session<br/>parec --monitor-stream → 48 kHz S16LE → app.Audio"]
-            xinput["input.go<br/>pure-Go uinput → virtual Xbox 360 pad<br/>RetroPad wire → EV_KEY/EV_ABS + SDL hotplug"]
+            xcaged["caged.go<br/>app.App impl · composes nativeemu<br/>stub emitter → real frames on first live frame"]
+            xconf["xemuconfig.go<br/>BIOS discovery + xemu.toml template + env"]
+        end
+        subgraph flycast["pkg/worker/caged/flycast"]
+            fcaged["caged.go<br/>app.App impl · composes nativeemu<br/>Dreamcast 4-port fanout · stub emitter"]
+            fconf["flycastconfig.go<br/>emu.cfg template + env"]
         end
         subgraph encpkg["pkg/encoder"]
             yuv["yuv<br/>RGBA→I420"]
@@ -67,14 +75,15 @@ flowchart TB
         room --> caged
         caged --> libretro
         caged --> xemu
+        caged --> flycast
+        xemu --> nativeemu
+        flycast --> nativeemu
         nanoarch <-.cgo.-> corelib["libretro core<br/>(lrps2, mupen64plus, …)"]
         nanoarch --> graphics
         graphics --> media
-        xcaged -.spawns.-> xproc
-        xproc <-.ld_preload.-> xemuproc["xemu process<br/>(external, Xvfb-backed)"]
-        xvideo --> media
-        xaudio --> media
-        xinput --> xproc
+        neproc <-.x11grab / pulse / uinput.-> emuproc["xemu or flycast process<br/>(external, Xvfb-backed)"]
+        nevideo --> media
+        neaudio --> media
         media --> yuv
         media --> nvenc
         media --> h264
@@ -105,7 +114,7 @@ flowchart TB
     savesfs -- rw bind --> cloud
 
     classDef ext fill:#e2e3e5,stroke:#383d41;
-    class client,corelib,xemuproc,traefik,ingress ext;
+    class client,corelib,emuproc,traefik,ingress ext;
 ```
 
 ## Notable invariants
@@ -117,5 +126,6 @@ flowchart TB
 - **One container, two processes**: coordinator and worker share the image. Dockerfile.run's CMD supervises worker restarts; a hard crash keeps coordinator alive and the supervisor forks a fresh worker.
 - **Bind-mounted paths** let a `web/` rsync deploy in seconds, a config.yaml edit + `systemctl restart` avoid a rebuild, and ROM/core/save directories be managed independently of the image.
 - **GPU access uses CDI** (`AddDevice=nvidia.com/gpu=all`), not hand-curated driver-versioned bind mounts, so the quadlet survives NVIDIA driver upgrades without edits.
-- **Second backend via native process**: `pkg/worker/caged/xemu` runs xemu as an external OS process alongside libretro. `caged.Manager` dispatches on `ModName` (`libretro` / `xemu`); `app.App` is the shared contract so `room/` and `media/` stay backend-agnostic. Phase 2 added Xvfb+process lifecycle; Phase 3 captures video via an `ffmpeg -f x11grab` pipe reading xemu's Xvfb display — the original LD_PRELOAD GL hook captured xemu's offscreen ImGui overlay context rather than the game, see `docs/capture-path-not-taken-ld-preload.md` for the re-entry notes. Phase 4 added per-session audio: each cage spawns its own pipewire+wireplumber+pipewire-pulse triplet under a private `XDG_RUNTIME_DIR`, xemu connects via SDL pulse, and parec feeds 48 kHz S16LE chunks through app.Audio at 100 Hz (10 ms chunks). Phase 5 adds input: a pure-Go uinput device emulating Microsoft Xbox 360 controller vid/pid (045e:028e) with xpad-style button codes, so SDL's built-in gamecontrollerdb mapping applies automatically. Phase 6 adds dispatch: `GameMetadata.Backend` is populated during library scan from the core config's `backend` field, `Worker.New` now loads both `caged.Libretro` and `caged.Xemu` at startup, and `HandleGameStart` branches on `game.Backend` to route xbox games to `startXemuRoom` (a slimmer setup path that skips save-state / cloud / recording / zero-copy — all libretro-specific). Save/Load/Reset handlers gate on `room.IsLibretro(r.App())` and return `ErrPacket` for non-libretro backends. The stub frame emitter is parked on the first live frame so the room only ever sees one stream. xemu stays off by default (`xemu.enabled: false`).
+- **Native-process backends unified via `pkg/worker/caged/nativeemu`**: `xemu` (original Xbox) and `flycast` (Sega Dreamcast) each run their emulator as an external OS process alongside libretro. Both compose the shared `nativeemu.{Process, Xvfb, Videocap, PipeWireSession, Audiocap, VirtualPad}` primitives rather than duplicating plumbing. `caged.Manager` dispatches on `ModName` (`libretro` / `xemu` / `flycast`); `app.App` is the shared contract so `room/` and `media/` stay backend-agnostic. Video capture: `ffmpeg -f x11grab` pipe reading the emu's Xvfb display — the original LD_PRELOAD GL hook captured xemu's offscreen ImGui context rather than the game output, see `docs/capture-path-not-taken-ld-preload.md`. Audio: each cage spawns its own pipewire+wireplumber+pipewire-pulse triplet under a private `XDG_RUNTIME_DIR`, the emu connects via SDL pulse, and parec feeds 48 kHz S16LE chunks through app.Audio at 100 Hz (10 ms chunks). Input: pure-Go uinput device emulating Microsoft Xbox 360 vid/pid (045e:028e) with xpad-style button codes — SDL's built-in gamecontrollerdb mapping applies automatically in both emulators. `HandleGameStart` routes via an effective-backend switch: per-launch `?backend=<modname>` query param wins, then the library-scan `GameMetadata.Backend`, else the default libretro path. Save/Load/Reset handlers gate on `room.IsLibretro(r.App())` and return `ErrPacket` for non-libretro backends. Stub frame emitter is parked on the first live frame so the room only ever sees one stream. Native backends stay off by default (`xemu.enabled: false`, `flycast.enabled: false`).
+- **Backend override precedence**: `CLOUDPLAY_BACKEND_<SYSTEM>` env var (deploy-wide) → config.yaml core `backend:` field (per-system default captured at library scan) → per-launch `?backend=<modname>` query param from the browser (wins at dispatch time). Empty at every layer falls through to libretro. The env-var and config layers both resolve inside `Emulator.GetBackend(system)`; the per-launch layer is applied in `HandleGameStart` against `rq.Backend`.
 - **uinput permissions on host**: `/dev/uinput` must be writable by the container's mapped user. The `systemd/99-cloudplay-uinput.rules` udev rule enforces `GROUP=input, MODE=0660` on both `/dev/uinput` and event nodes that match our virtual-pad names. Rootless podman needs either (a) the `input` gid in the user's `/etc/subgid` + `PodmanArgs=--group-add keep-groups`, or (b) the node chowned to the rootless user. Option (b) is tested/documented; option (a) is the long-term fix.

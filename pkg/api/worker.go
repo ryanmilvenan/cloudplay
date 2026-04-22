@@ -19,6 +19,9 @@ type (
 		RecordUser  string
 		Game        string `json:"game"`
 		PlayerIndex int    `json:"player_index"`
+		// Backend, when non-empty, is a per-launch override from the
+		// browser that wins over the library-scan GameMetadata.Backend.
+		Backend string `json:"backend,omitempty"`
 	}
 	GameInfo struct {
 		Alias   string `json:"alias"`

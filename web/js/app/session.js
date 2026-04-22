@@ -5,7 +5,7 @@
 
 import {api} from 'api';
 import {input} from 'input';
-import {socket, webrtc} from 'network';
+import {mic, socket, webrtc} from 'network';
 import {debounce} from 'utils';
 import {log} from 'log';
 
@@ -71,12 +71,19 @@ export const startGame = () => {
     setState({joiningSharedSession});
     const selectedTitle = gameList.selected || parseGameNameFromRoomId(room.id);
 
+    // `?backend=<modname>` on the launch URL overrides the server-side
+    // default for this one session — e.g. ?backend=flycast routes a
+    // Dreamcast ROM to the flycast native adapter instead of libretro-DC.
+    // Empty / missing = use server default.
+    const backendOverride = new URLSearchParams(window.location.search).get('backend') || '';
+
     api.game.start(
         selectedTitle,
         room.id,
         recording.isActive(),
         recording.getUser(),
         +playerIndex.value - 1,
+        backendOverride,
     );
 
     gameList.disable();
@@ -98,6 +105,13 @@ export const startGame = () => {
     overlay.setGameTitle(game ? (game.alias || game.title) : activeGameTitle(joiningSharedSession));
     setState({currentSlot: +playerIndex.value - 1});
     overlay.enable();
+
+    // Mic uplink is opt-in (settings → "Enable microphone"). When on, we
+    // request mic permission, build the resampling AudioWorklet, and
+    // start streaming PCM over the "microphone" WebRTC data channel. The
+    // call is fire-and-forget — games that don't need mic keep working
+    // even if permission is denied. Denial / browser unsupport no-ops.
+    mic.start();
 };
 
 export const saveGame = debounce(() => api.game.save(), 1000);
@@ -122,6 +136,7 @@ export const resetToMenu = ({reconnect = false} = {}) => {
     overlay.disable();
     hideSlotPicker();
     input.retropad.toggle(false);
+    mic.stop();
     room.reset();
     gameList.disable();
     showMenuScreen();
@@ -153,6 +168,7 @@ overlay.onLeave = () => {
     message.show('Killing session...');
     overlay.disable();
     input.retropad.toggle(false);
+    mic.stop();
     api.game.quit(room.id);
 };
 
@@ -180,6 +196,7 @@ overlay.onBlowOnCartridge = () => {
     message.show('Blowing on the cartridge…');
     overlay.disable();
     input.retropad.toggle(false);
+    mic.stop();
     room.reset();
     webrtc.stop();
     socket.reopen();

@@ -105,7 +105,8 @@ RUN wget -q "https://github.com/flyinghead/flycast/releases/download/${FLYCAST_V
     chmod +x /tmp/flycast.AppImage && \
     cd /opt && /tmp/flycast.AppImage --appimage-extract && \
     mv squashfs-root flycast && \
-    ln -s /opt/flycast/AppRun /usr/local/bin/flycast && \
+    printf '#!/bin/sh\nexec /opt/flycast/AppRun "$@"\n' > /usr/local/bin/flycast && \
+    chmod +x /usr/local/bin/flycast && \
     rm /tmp/flycast.AppImage
 
 # --- Default entrypoint: stay alive, driven via `podman exec` -----------------

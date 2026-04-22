@@ -59,7 +59,14 @@ RUN ln -s /opt/xemu/AppRun /usr/local/bin/xemu
 # Upgrading flycast: bump ARG FLYCAST_VERSION + rerun
 # scripts/extract-flycast.sh, then /deploy-cloudplay.
 COPY vendor/flycast /opt/flycast
-RUN ln -s /opt/flycast/AppRun /usr/local/bin/flycast
+# A wrapper, not a symlink: flycast's AppRun resolves $APPDIR via `dirname
+# "$0"`, which breaks when $0 is the symlink path (/usr/local/bin/flycast)
+# — it tries /usr/local/bin/usr/bin/flycast and errors out. The wrapper
+# invokes AppRun with its real absolute path so APPDIR resolves to
+# /opt/flycast. Xemu's AppRun is smarter about self-location so the
+# symlink there keeps working.
+RUN printf '#!/bin/sh\nexec /opt/flycast/AppRun "$@"\n' > /usr/local/bin/flycast \
+    && chmod +x /usr/local/bin/flycast
 
 COPY xorg-dummy.conf /etc/X11/xorg.conf
 

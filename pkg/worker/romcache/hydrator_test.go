@@ -212,6 +212,59 @@ func TestClassifyGdi(t *testing.T) {
 	}
 }
 
+// TestClassifyCue covers the CUE+BIN shape (Dreamcast Seaman and others
+// distributed this way): a .cue manifest plus .bin track files at the
+// archive root. classify() should return kind="cue" and a cuePath
+// pointing at the .cue file.
+func TestClassifyCue(t *testing.T) {
+	dir := t.TempDir()
+	writes := []struct{ name, body string }{
+		{"Seaman (USA).cue", "FILE \"Seaman (USA) (Track 1).bin\" BINARY\n  TRACK 01 MODE1/2352\n"},
+		{"Seaman (USA) (Track 1).bin", "x"},
+		{"Seaman (USA) (Track 2).bin", "x"},
+		{"Seaman (USA) (Track 3).bin", "x"},
+	}
+	for _, w := range writes {
+		if err := os.WriteFile(filepath.Join(dir, w.name), []byte(w.body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", w.name, err)
+		}
+	}
+	shape, err := classify(dir)
+	if err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+	if shape.kind != "cue" {
+		t.Errorf("expected kind=cue, got %q", shape.kind)
+	}
+	if shape.cuePath == "" {
+		t.Error("cuePath empty despite cue kind")
+	}
+}
+
+// TestClassifySingleFileDreamcast covers .chd / .cdi archives — single-file
+// Dreamcast disc formats handled like disc-image: no repacking, just rename.
+func TestClassifySingleFileDreamcast(t *testing.T) {
+	for _, ext := range []string{".chd", ".cdi"} {
+		t.Run(ext, func(t *testing.T) {
+			dir := t.TempDir()
+			name := "Crazy Taxi (USA)" + ext
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+				t.Fatalf("write %s: %v", name, err)
+			}
+			shape, err := classify(dir)
+			if err != nil {
+				t.Fatalf("classify: %v", err)
+			}
+			if shape.kind != "disc-image" {
+				t.Errorf("expected kind=disc-image, got %q", shape.kind)
+			}
+			if shape.isoPath == "" {
+				t.Error("isoPath empty despite disc-image kind")
+			}
+		})
+	}
+}
+
 // TestResolveRaceReuse verifies the post-lock re-check returns the
 // extracted payload when the archive is already gone.
 func TestResolveRaceReuse(t *testing.T) {

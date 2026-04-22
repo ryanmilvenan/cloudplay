@@ -219,15 +219,14 @@ func (h *Hydrator) extract(src string, progress ProgressFunc) (string, error) {
 			Msg("[ROMCACHE] extract done")
 		return final, nil
 
-	case "gdi":
-		// GDI multi-track (Dreamcast): the .gdi references track files
-		// by relative path, so everything must live in the same dir.
-		// Track filenames (track01.bin, track02.raw, …) collide across
-		// games, so we put each game in its own <parent>/<title>/ subdir.
+	case "gdi", "cue":
+		// Multi-track disc dumps (Dreamcast GDI or CUE+BIN — structurally
+		// identical: a manifest file references track files by relative
+		// path, so everything must live in the same dir. Track filenames
+		// (track01.bin, Seaman (USA) (Track 1).bin, …) collide across
+		// games, so each game gets its own <parent>/<title>/ subdir.
 		// Rename the entire extract temp dir into its final home.
 		finalDir := filepath.Join(parent, payloadBaseName(src))
-		// If an earlier extract left a stale dir behind, clear it so
-		// the rename succeeds.
 		if _, err := os.Stat(finalDir); err == nil {
 			if err := os.RemoveAll(finalDir); err != nil {
 				return "", fmt.Errorf("romcache: clear stale %s: %w", finalDir, err)
@@ -238,20 +237,21 @@ func (h *Hydrator) extract(src string, progress ProgressFunc) (string, error) {
 		if err := os.Rename(tmp, finalDir); err != nil {
 			return "", fmt.Errorf("romcache: rename %s → %s: %w", tmp, finalDir, err)
 		}
-		// extract() has a defer os.RemoveAll(tmp) that would now miss —
-		// the dir moved. RemoveAll on a missing path is a no-op so no
-		// damage, but mark the var empty for clarity.
 		tmp = ""
-		final := filepath.Join(finalDir, filepath.Base(shape.gdiPath))
+		manifestPath := shape.gdiPath
+		if shape.kind == "cue" {
+			manifestPath = shape.cuePath
+		}
+		final := filepath.Join(finalDir, filepath.Base(manifestPath))
 		size, _ := dirSizeInt64(finalDir)
 		h.Log.Info().Str("final", final).Int64("bytes", size).
 			Dur("elapsed", time.Since(start)).
-			Str("shape", "gdi").
+			Str("shape", shape.kind).
 			Msg("[ROMCACHE] extract done")
 		return final, nil
 
 	default:
-		return "", fmt.Errorf("romcache: archive %s matched no known shape (no .iso/.xiso, no default.xbe, no .gdi)", src)
+		return "", fmt.Errorf("romcache: archive %s matched no known shape (no .iso/.xiso/.chd/.cdi, no default.xbe, no .gdi/.cue)", src)
 	}
 }
 
@@ -261,13 +261,14 @@ func (h *Hydrator) extract(src string, progress ProgressFunc) (string, error) {
 func dirSizeInt64(root string) (int64, error) { return dirSize(root), nil }
 
 // extractShape summarizes what a classify() walk found in the extracted
-// tmp tree. Only one of {isoPath, xbeDir, gdiPath} is meaningful,
-// selected by `kind`.
+// tmp tree. Only one of {isoPath, xbeDir, gdiPath, cuePath} is
+// meaningful, selected by `kind`.
 type extractShape struct {
-	kind    string // "disc-image" | "filesystem" | "gdi" | "unknown"
+	kind    string // "disc-image" | "filesystem" | "gdi" | "cue" | "unknown"
 	isoPath string
 	xbeDir  string
 	gdiPath string
+	cuePath string
 }
 
 // classify walks the extracted directory and decides which shape we
@@ -285,7 +286,12 @@ func classify(root string) (extractShape, error) {
 		}
 		name := strings.ToLower(d.Name())
 		switch {
-		case strings.HasSuffix(name, ".iso") || strings.HasSuffix(name, ".xiso"):
+		case strings.HasSuffix(name, ".iso") ||
+			strings.HasSuffix(name, ".xiso") ||
+			// Single-file Dreamcast disc formats (flycast-native). No
+			// repacking needed; treat as disc-image and rename in place.
+			strings.HasSuffix(name, ".chd") ||
+			strings.HasSuffix(name, ".cdi"):
 			s.isoPath = path
 		case name == "default.xbe":
 			// default.xbe lives at the root of the Xbox game's filesystem.
@@ -293,6 +299,11 @@ func classify(root string) (extractShape, error) {
 			s.xbeDir = filepath.Dir(path)
 		case strings.HasSuffix(name, ".gdi"):
 			s.gdiPath = path
+		case strings.HasSuffix(name, ".cue"):
+			// CUE+BIN multi-track dumps (Seaman and other DC titles
+			// distributed this way). Handled structurally like .gdi:
+			// the .cue references .bin tracks by relative name.
+			s.cuePath = path
 		}
 		return nil
 	})
@@ -306,6 +317,8 @@ func classify(root string) (extractShape, error) {
 		s.kind = "filesystem"
 	case s.gdiPath != "":
 		s.kind = "gdi"
+	case s.cuePath != "":
+		s.kind = "cue"
 	default:
 		s.kind = "unknown"
 	}

@@ -13,6 +13,8 @@ package flycast
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -266,6 +268,16 @@ func (c *Caged) startProcess() error {
 		return err
 	}
 
+	// Flycast writes VMU saves to $XDG_DATA_HOME/flycast (defaulting to
+	// $HOME/.local/share/flycast). The dir doesn't exist in a fresh
+	// container, so flycast logs "Failed to create VMU save file" on boot
+	// and games like Seaman that need persisted VMU state regress. Make
+	// the dir exist before launch; durable-across-restarts saves remain
+	// out-of-scope (would need a quadlet bind mount like libretro/saves).
+	if home, err := os.UserHomeDir(); err == nil {
+		_ = os.MkdirAll(filepath.Join(home, ".local", "share", "flycast"), 0o755)
+	}
+
 	bin := c.conf.Flycast.BinaryPath
 	if bin == "" {
 		bin = "flycast"
@@ -295,7 +307,10 @@ func (c *Caged) startProcess() error {
 		c.acap = &nativeemu.Audiocap{
 			Log:             c.log,
 			LogPrefix:       logPrefixAudio,
-			AppName:         "Flycast",
+			// Flycast registers with pulse as lowercase "flycast" via SDL's
+			// default application-name hint, not "Flycast" — pactl list
+			// sink-inputs confirmed this empirically on v2.6.
+			AppName:         "flycast",
 			PulseServer:     pulseSrv,
 			PulseRuntimeDir: pulseRun,
 		}

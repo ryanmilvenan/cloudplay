@@ -71,8 +71,8 @@ type FlycastConfig struct {
 	MicRate int `yaml:"micRate"`
 
 	// MicDeviceID is the flycast maple-expansion device ID to bind to Port
-	// A slot 2 when Mic is true. Default 3 matches the commonly-reported
-	// flycast Microphone value; make configurable since the enum has
-	// drifted across flycast versions.
+	// A slot 1 when Mic is true. 2 is MDT_Microphone in flycast v2.6
+	// (core/hw/maple/maple_cfg.h). Configurable in case the enum drifts
+	// in future releases — 3 is MDT_PurupuruPack, 1 is MDT_SegaVMU.
 	MicDeviceID int `yaml:"micDeviceId"`
 }

@@ -372,13 +372,14 @@ flycast:
   height: 480
   # Microphone uplink for Seaman. Requires audioCapture=true (mic uses the
   # same per-session PipeWire instance). micDeviceId is flycast's maple
-  # expansion device ID for Microphone; 3 matches the commonly-reported
-  # value but verify against the running flycast build if mic bindings
-  # silently fail.
+  # expansion device ID for Microphone; 2 is correct for flycast v2.6
+  # (MDT_Microphone in core/hw/maple/maple_cfg.h). Configurable in case
+  # the enum drifts in future releases — 3 is MDT_PurupuruPack, 1 is
+  # MDT_SegaVMU.
   mic: false
   micSourceName: cloudplay-mic
   micRate: 11025
-  micDeviceId: 3
+  micDeviceId: 2
 
 # IGDB per-game metadata enrichment (Phase 2 of the search-and-AI
 # rework). Populates genre / year / franchise / summary / cover URL on

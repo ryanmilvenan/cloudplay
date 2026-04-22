@@ -47,7 +47,8 @@ func writeFlycastConfig(conf config.FlycastConfig) error {
 	if conf.Mic {
 		slot1 = conf.MicDeviceID
 		if slot1 <= 0 {
-			slot1 = 3
+			// MDT_Microphone in flycast v2.6 (core/hw/maple/maple_cfg.h).
+			slot1 = 2
 		}
 	}
 	body := fmt.Sprintf(`[config]

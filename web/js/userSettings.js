@@ -9,11 +9,13 @@
 
 import {api} from 'api';
 import {getState, subscribe} from 'state';
+import {opts, settings} from 'settings';
 
 const panelEl = document.getElementById('user-settings-panel');
 const openBtn = document.getElementById('overlay-user-settings');
 const closeBtn = document.getElementById('user-settings-close');
 const identityEl = document.getElementById('user-settings-identity');
+const micEnabledEl = document.getElementById('user-settings-mic-enabled');
 const raUserEl = document.getElementById('user-settings-ra-user');
 const raTokenEl = document.getElementById('user-settings-ra-token');
 const raSaveEl = document.getElementById('user-settings-ra-save');
@@ -72,10 +74,15 @@ const renderRa = () => {
     }
 };
 
+const renderMic = () => {
+    micEnabledEl.checked = !!settings.loadOr(opts.ENABLE_MICROPHONE, false);
+};
+
 const open = () => {
     panelEl.classList.remove('hidden');
     isOpen = true;
     renderIdentity();
+    renderMic();
     renderRa();
 };
 
@@ -88,6 +95,10 @@ const toggle = () => (isOpen ? close() : open());
 
 openBtn.addEventListener('click', toggle);
 closeBtn.addEventListener('click', close);
+
+micEnabledEl.addEventListener('change', (e) => {
+    settings.set(opts.ENABLE_MICROPHONE, !!e.target.checked);
+});
 
 raSaveEl.addEventListener('click', () => {
     const user = raUserEl.value.trim();

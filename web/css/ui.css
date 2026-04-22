@@ -372,6 +372,24 @@
     color: rgba(255,255,255,0.5);
     margin-bottom: 4px;
 }
+.user-settings-field--row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+.user-settings-field--row .user-settings-field__label {
+    display: inline;
+    font-size: 13px;
+    color: rgba(255,255,255,0.85);
+    margin: 0;
+}
+.user-settings-checkbox {
+    accent-color: rgba(255,255,255,0.85);
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
 .user-settings-input {
     width: 100%;
     padding: 8px 10px;

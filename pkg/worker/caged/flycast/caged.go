@@ -314,11 +314,19 @@ func (c *Caged) startProcess() error {
 			PulseServer:     pulseSrv,
 			PulseRuntimeDir: pulseRun,
 		}
-		if err := c.acap.Start(c.onRealAudioFrame); err != nil {
-			c.log.Warn().Err(err).
-				Msgf("%saudiocap start failed; continuing without audio", logPrefixCage)
-			c.acap = nil
-		}
+		// Audiocap discovers its target stream by polling `pactl list
+		// sink-inputs` for up to 20s. Running that synchronously here would
+		// stall startProcess for up to 20s if flycast hasn't yet opened its
+		// SDL audio device — longer than the coordinator's 10s StartGame
+		// RPC timeout, so the browser would see "did not load" even though
+		// the emulator is running. Spawn it in a goroutine: video starts
+		// immediately, audio joins whenever flycast registers with pulse.
+		go func(ac *nativeemu.Audiocap) {
+			if err := ac.Start(c.onRealAudioFrame); err != nil {
+				c.log.Warn().Err(err).
+					Msgf("%saudiocap start failed; continuing without audio", logPrefixCage)
+			}
+		}(c.acap)
 	}
 
 	return nil

@@ -268,11 +268,16 @@ func (c *Caged) startProcess() error {
 			PulseServer:     pulseSrv,
 			PulseRuntimeDir: pulseRun,
 		}
-		if err := c.acap.Start(c.onRealAudioFrame); err != nil {
-			c.log.Warn().Err(err).
-				Msgf("%saudiocap start failed; continuing without audio", logPrefixCage)
-			c.acap = nil
-		}
+		// Audiocap's discovery can block up to 20s polling pactl. Run it
+		// in a goroutine so startProcess returns in time for the
+		// coordinator's 10s StartGame RPC window; audio joins the live
+		// stream whenever xemu registers its pulse sink-input.
+		go func(ac *nativeemu.Audiocap) {
+			if err := ac.Start(c.onRealAudioFrame); err != nil {
+				c.log.Warn().Err(err).
+					Msgf("%saudiocap start failed; continuing without audio", logPrefixCage)
+			}
+		}(c.acap)
 	}
 
 	return nil

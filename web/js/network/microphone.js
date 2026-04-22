@@ -19,6 +19,13 @@ let active = false;
 
 const TARGET_RATE = 11025;
 
+// Register the setting at module-import time so the cog-menu settings
+// panel's render() sees the key in its store and draws a row for it.
+// (The panel only renders keys that are loaded. Every other `opts.*`
+// relies on the same pattern — stream.js, screen.js, keyboard.js, etc.
+// all call loadOr at import time.)
+settings.loadOr(opts.ENABLE_MICROPHONE, false);
+
 const isEnabled = () => !!settings.loadOr(opts.ENABLE_MICROPHONE, false);
 
 const start = async () => {

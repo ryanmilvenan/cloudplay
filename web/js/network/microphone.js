@@ -32,12 +32,17 @@ const init = () => {
 const isEnabled = () => !!settings.loadOr(opts.ENABLE_MICROPHONE, false);
 
 const start = async () => {
+    log.info('[mic] start() called active=' + active + ' enabled=' + isEnabled());
     if (active) return;
-    if (!isEnabled()) return;
+    if (!isEnabled()) {
+        log.info('[mic] skipped — ENABLE_MICROPHONE setting is off');
+        return;
+    }
     if (!navigator.mediaDevices || !window.AudioWorkletNode) {
         log.warn('[mic] browser lacks getUserMedia/AudioWorklet; mic uplink disabled');
         return;
     }
+    log.info('[mic] requesting getUserMedia permission…');
     try {
         // Disable the aggressive defaults — the Dreamcast speech recognizer
         // wants raw sound, not Chrome's voice-chat-tuned processing.
@@ -48,6 +53,7 @@ const start = async () => {
                 autoGainControl: false,
             },
         });
+        log.info('[mic] permission granted, stream acquired');
     } catch (e) {
         log.warn('[mic] getUserMedia denied or failed:', e);
         return;

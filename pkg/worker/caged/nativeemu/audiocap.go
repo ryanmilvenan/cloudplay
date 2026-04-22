@@ -1,4 +1,4 @@
-package xemu
+package nativeemu
 
 import (
 	"bufio"
@@ -22,13 +22,12 @@ import (
 )
 
 // Audiocap captures the stereo S16LE output of a PulseAudio/PipeWire client
-// (xemu in production; a canary sine generator in tests) and fires the
-// configured callback once per ~chunkMs milliseconds.
+// and fires the configured callback once per ~ChunkMs milliseconds.
 //
 // Lifecycle:
 //
-//	a := Audiocap{Log: log, AppName: "xemu", PulseServer: "unix:/tmp/pw-run/pulse/native"}
-//	if err := a.Start(onAudio); err != nil { ... }
+//	a := Audiocap{Log: log, AppName: "xemu", PulseServer: "unix:...", PulseRuntimeDir: "..."}
+//	a.Start(onAudio)
 //	...
 //	a.Close()
 //
@@ -38,13 +37,13 @@ import (
 type Audiocap struct {
 	// Log receives diagnostics; required.
 	Log *logger.Logger
+	// LogPrefix tags every log line. Defaults to "[NATIVE-AUDIO] " when empty.
+	LogPrefix string
 	// AppName is the PulseAudio application.name of the stream to capture.
-	// For xemu this is "xemu".
 	AppName string
 	// PulseServer is the PULSE_SERVER URI; required.
 	PulseServer string
-	// PulseRuntimeDir is the XDG_RUNTIME_DIR the server lives under.
-	// Typically /tmp/pw-run in the dev container. Required.
+	// PulseRuntimeDir is the XDG_RUNTIME_DIR the server lives under; required.
 	PulseRuntimeDir string
 	// DiscoveryTimeout gives up if the sink-input doesn't appear. Default 20 s.
 	DiscoveryTimeout time.Duration
@@ -60,8 +59,15 @@ type Audiocap struct {
 	closing    atomic.Bool
 	doneCh     chan struct{}
 	bytesRecv  atomic.Uint64
-	lastRMS    atomic.Uint64 // stored as math.Float64bits
+	lastRMS    atomic.Uint64
 	chunksRecv atomic.Uint64
+}
+
+func (a *Audiocap) logPrefix() string {
+	if a.LogPrefix == "" {
+		return "[NATIVE-AUDIO] "
+	}
+	return a.LogPrefix
 }
 
 // Start polls for the target stream, spawns parec, and begins forwarding
@@ -96,7 +102,8 @@ func (a *Audiocap) Start(cb func(app.Audio)) error {
 	if err != nil {
 		return err
 	}
-	a.Log.Info().Str("app", a.AppName).Int("idx", idx).Msg("[XEMU-AUDIO] target stream located")
+	a.Log.Info().Str("app", a.AppName).Int("idx", idx).
+		Msgf("%starget stream located", a.logPrefix())
 
 	a.cmd = exec.Command("parec",
 		"--monitor-stream="+strconv.Itoa(idx),
@@ -113,7 +120,7 @@ func (a *Audiocap) Start(cb func(app.Audio)) error {
 	if err != nil {
 		return fmt.Errorf("audiocap: stdout pipe: %w", err)
 	}
-	a.cmd.Stderr = newStreamLogger(a.Log, "[XEMU-AUDIO:parec] ")
+	a.cmd.Stderr = newStreamLogger(a.Log, a.logPrefix()+"parec ")
 	a.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	a.stdoutPipe = stdout
 
@@ -123,7 +130,8 @@ func (a *Audiocap) Start(cb func(app.Audio)) error {
 	a.started = true
 	a.doneCh = make(chan struct{})
 	go a.readLoop()
-	a.Log.Info().Int("pid", a.cmd.Process.Pid).Msg("[XEMU-AUDIO] parec spawned")
+	a.Log.Info().Int("pid", a.cmd.Process.Pid).
+		Msgf("%sparec spawned", a.logPrefix())
 	return nil
 }
 
@@ -156,7 +164,7 @@ func (a *Audiocap) Close() error {
 	a.Log.Info().
 		Uint64("chunks", a.chunksRecv.Load()).
 		Uint64("bytes", a.bytesRecv.Load()).
-		Msg("[XEMU-AUDIO] capture closed")
+		Msgf("%scapture closed", a.logPrefix())
 	return nil
 }
 
@@ -166,18 +174,14 @@ func (a *Audiocap) BytesReceived() uint64 { return a.bytesRecv.Load() }
 // ChunksReceived reports the cumulative callback count.
 func (a *Audiocap) ChunksReceived() uint64 { return a.chunksRecv.Load() }
 
-// LastRMS returns the most recent per-chunk RMS value. Zero before the first
-// chunk arrives. Diagnostics only — not intended for encoder decisions.
+// LastRMS returns the most recent per-chunk RMS value.
 func (a *Audiocap) LastRMS() float64 {
 	return math.Float64frombits(a.lastRMS.Load())
 }
 
-// readLoop is the parec→callback pump. Reads fixed-size chunks based on
-// ChunkMs and invokes cb for each.
 func (a *Audiocap) readLoop() {
 	defer close(a.doneCh)
 
-	// 10 ms of 48 kHz stereo s16 = 48000 * 2 * 2 / 100 = 1920 bytes = 960 int16s.
 	samplesPerChunk := 48000 * 2 * a.ChunkMs / 1000
 	bytesPerChunk := samplesPerChunk * 2
 	buf := make([]byte, bytesPerChunk)
@@ -196,7 +200,7 @@ func (a *Audiocap) readLoop() {
 				return
 			}
 			if !a.closing.Load() {
-				a.Log.Warn().Err(err).Msg("[XEMU-AUDIO] parec read failed")
+				a.Log.Warn().Err(err).Msgf("%sparec read failed", a.logPrefix())
 			}
 			return
 		}
@@ -217,7 +221,7 @@ func (a *Audiocap) readLoop() {
 				Uint64("chunks_5s", sinceLog).
 				Float64("last_rms", math.Float64frombits(a.lastRMS.Load())).
 				Uint64("total_bytes", a.bytesRecv.Load()).
-				Msg("[XEMU-AUDIO] flow")
+				Msgf("%sflow", a.logPrefix())
 			lastLog = time.Now()
 			sinceLog = 0
 		}
@@ -237,8 +241,6 @@ func updateRMS(slot *atomic.Uint64, samples []int16) {
 	slot.Store(math.Float64bits(rms))
 }
 
-// discoverSinkInput polls `pactl list sink-inputs` until it finds one whose
-// `application.name` matches a.AppName. Returns the sink-input index.
 func (a *Audiocap) discoverSinkInput(ctx context.Context) (int, error) {
 	tick := time.NewTicker(200 * time.Millisecond)
 	defer tick.Stop()
@@ -288,7 +290,6 @@ func (a *Audiocap) listAndFind() (int, bool) {
 			continue
 		}
 		if haveID && strings.HasPrefix(line, "application.name = ") {
-			// value is quoted, e.g. `application.name = "xemu"`
 			v := strings.TrimPrefix(line, "application.name = ")
 			v = strings.Trim(v, `"`)
 			if v == a.AppName {

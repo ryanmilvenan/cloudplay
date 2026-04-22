@@ -14,6 +14,7 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/config"
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/app"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/nativeemu"
 )
 
 // findBiosDir looks for Xbox BIOS files under /xemu-bios or a few likely
@@ -335,7 +336,7 @@ func TestVirtualPadInjection(t *testing.T) {
 	_ = f.Close()
 
 	log := logger.NewConsole(false, "xemu-test", false)
-	pad := &VirtualPad{Log: log, DeviceName: "cloudplay-unit-test-pad"}
+	pad := &nativeemu.VirtualPad{Log: log, DeviceName: "cloudplay-unit-test-pad"}
 	if err := pad.Open(); err != nil {
 		t.Fatalf("pad open: %v", err)
 	}

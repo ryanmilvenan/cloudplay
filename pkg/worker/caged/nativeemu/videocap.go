@@ -1,4 +1,4 @@
-package xemu
+package nativeemu
 
 import (
 	"errors"
@@ -16,28 +16,25 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/app"
 )
 
-// Videocap captures the xemu process's Xvfb display through an ffmpeg
-// x11grab pipe and routes raw RGBA frames into the configured app.Video
-// callback.
+// Videocap captures an Xvfb display through an ffmpeg x11grab pipe and routes
+// raw RGBA frames into the configured app.Video callback.
 //
-// Why x11grab rather than the LD_PRELOAD GL hook we originally shipped:
-// xemu creates four SDL windows (three offscreen GL-backed contexts for
-// internal render passes plus one visible output window). A naive
-// SDL_GL_SwapWindow hook grabs whichever window swaps first — and it is
-// always an offscreen one rendering xemu's idle overlay. x11grab reads
-// the final composited pixels xemu puts on screen, full stop. See
-// docs/capture-path-not-taken-ld-preload.md for the re-entry notes if
-// the x11grab GPU→CPU cost ever becomes the bottleneck.
+// Why x11grab rather than an LD_PRELOAD GL hook: many SDL2 emulators create
+// offscreen GL contexts in addition to their visible window, and a naive
+// GL-swap hook can latch onto the wrong surface. x11grab reads the final
+// composited pixels — whatever the emulator puts on screen. If the
+// GPU→CPU readback cost ever becomes the bottleneck, callers can swap in an
+// LD_PRELOAD variant behind the same Videocap surface.
 type Videocap struct {
 	// Log receives lifecycle and ffmpeg stderr.
 	Log *logger.Logger
+	// LogPrefix tags every log line. Defaults to "[NATIVE-VIDEO] " when empty.
+	LogPrefix string
 	// Display is the X display ffmpeg captures from (e.g. ":100").
 	Display string
-	// Width/Height is the Xvfb screen geometry we capture — the xemu
-	// window fills this when we keep Xvfb the same size as xemu's
-	// viewport.
+	// Width/Height is the Xvfb screen geometry we capture.
 	Width, Height int
-	// Framerate paces ffmpeg's captures. 60 matches xemu's render loop.
+	// Framerate paces ffmpeg's captures. Defaults to 60.
 	Framerate int
 
 	cb func(app.Video)
@@ -49,6 +46,13 @@ type Videocap struct {
 	cmd        *exec.Cmd
 	stdout     io.ReadCloser
 	framesRecv atomic.Uint64
+}
+
+func (v *Videocap) logPrefix() string {
+	if v.LogPrefix == "" {
+		return "[NATIVE-VIDEO] "
+	}
+	return v.LogPrefix
 }
 
 // Start spawns ffmpeg x11grab and a reader goroutine. Returns once the
@@ -73,10 +77,6 @@ func (v *Videocap) Start(cb func(app.Video)) error {
 	}
 	v.cb = cb
 
-	// x11grab → rawvideo pipe. -probesize 32 and -thread_queue_size 1024
-	// keep startup quick and absorb short bursts without dropping frames.
-	// -pix_fmt rgba matches app.RawFrame so we don't need a conversion
-	// step; ffmpeg does the X11 BGRA-to-RGBA swap on the fly.
 	v.cmd = exec.Command("ffmpeg",
 		"-hide_banner", "-loglevel", "warning",
 		"-thread_queue_size", "1024",
@@ -89,7 +89,7 @@ func (v *Videocap) Start(cb func(app.Video)) error {
 		"-",
 	)
 	v.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	v.cmd.Stderr = newStreamLogger(v.Log, "[XEMU-VIDEO:ffmpeg] ")
+	v.cmd.Stderr = newStreamLogger(v.Log, v.logPrefix()+"ffmpeg ")
 	stdout, err := v.cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("videocap: stdout pipe: %w", err)
@@ -103,7 +103,7 @@ func (v *Videocap) Start(cb func(app.Video)) error {
 	go v.readLoop()
 	v.Log.Info().Int("pid", v.cmd.Process.Pid).Str("display", v.Display).
 		Int("w", v.Width).Int("h", v.Height).Int("fps", v.Framerate).
-		Msg("[XEMU-VIDEO] ffmpeg x11grab spawned")
+		Msgf("%sffmpeg x11grab spawned", v.logPrefix())
 	return nil
 }
 
@@ -134,17 +134,13 @@ func (v *Videocap) Close() error {
 		}
 		<-done
 	}
-	v.Log.Info().Uint64("frames", v.framesRecv.Load()).Msg("[XEMU-VIDEO] capture closed")
+	v.Log.Info().Uint64("frames", v.framesRecv.Load()).
+		Msgf("%scapture closed", v.logPrefix())
 	return nil
 }
 
 // FramesReceived reports cumulative frames delivered to the callback.
 func (v *Videocap) FramesReceived() uint64 { return v.framesRecv.Load() }
-
-// SocketPath returns empty — this field is retained for code-path symmetry
-// with the libretro backend / earlier capture implementation, callers that
-// plumbed a Unix socket path no longer need to.
-func (v *Videocap) SocketPath() string { return "" }
 
 func (v *Videocap) readLoop() {
 	defer close(v.doneCh)
@@ -164,13 +160,12 @@ func (v *Videocap) readLoop() {
 				return
 			}
 			if !v.closing.Load() {
-				v.Log.Warn().Err(err).Msg("[XEMU-VIDEO] ffmpeg read failed")
+				v.Log.Warn().Err(err).Msgf("%sffmpeg read failed", v.logPrefix())
 			}
 			return
 		}
-		// Copy into a fresh slice so downstream consumers (encoder,
-		// recorder) can hold references without racing with the next
-		// ffmpeg write into our shared buffer.
+		// Fresh slice — downstream consumers may hold references past the
+		// next ffmpeg write.
 		frame := make([]byte, frameSize)
 		copy(frame, buf)
 
@@ -185,7 +180,7 @@ func (v *Videocap) readLoop() {
 			v.Log.Info().
 				Uint64("frames_5s", since).
 				Uint64("total", v.framesRecv.Load()).
-				Msg("[XEMU-VIDEO] flow")
+				Msgf("%sflow", v.logPrefix())
 			lastLog = time.Now()
 			since = 0
 		}

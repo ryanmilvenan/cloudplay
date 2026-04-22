@@ -2,11 +2,12 @@
 // (the original-Xbox emulator) as an external OS process and exposes it
 // through the app.App interface the worker's media pipeline already speaks.
 //
-// Phase 2 (current): Caged supervises a real Xvfb + xemu pair on Start and
-// tears both down on Close. The video callback is still a synthetic gradient
-// — frame capture from xemu lands in Phase 3. If Conf.BiosPath is empty,
-// only the stub frame loop runs (Phase-1-compatible mode), which keeps
-// existing unit tests meaningful.
+// The process/display/capture/input primitives are factored out into the
+// sibling nativeemu package so flycast and any future native-process
+// backend can compose the same building blocks. This file only holds the
+// xemu-specific glue: Xbox viewport defaults, BIOS-gated stub-only mode
+// (used by unit tests), and the four-port pad fanout tuned to xemu's SDL
+// joystick GUID bindings.
 package xemu
 
 import (
@@ -18,6 +19,16 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/config"
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/app"
+	"github.com/giongto35/cloud-game/v3/pkg/worker/caged/nativeemu"
+)
+
+const (
+	logPrefixProc  = "[XEMU-PROC] "
+	logPrefixXvfb  = "[XEMU-XVFB] "
+	logPrefixVideo = "[XEMU-VIDEO] "
+	logPrefixAudio = "[XEMU-AUDIO] "
+	logPrefixInput = "[XEMU-INPUT] "
+	logPrefixCage  = "[XEMU-CAGE] "
 )
 
 type CagedConf struct {
@@ -37,12 +48,12 @@ type Caged struct {
 	stopCh  chan struct{}
 	doneCh  chan struct{}
 
-	xvfb *Xvfb
-	proc *Process
-	vcap *Videocap
-	pwse *PipeWireSession
-	acap *Audiocap
-	pads [xboxPorts]*VirtualPad
+	xvfb *nativeemu.Xvfb
+	proc *nativeemu.Process
+	vcap *nativeemu.Videocap
+	pwse *nativeemu.PipeWireSession
+	acap *nativeemu.Audiocap
+	pads [xboxPorts]*nativeemu.VirtualPad
 
 	// liveFramesRecv is non-zero once the real capture path has delivered
 	// at least one frame; the stub loop then pauses its emissions so the
@@ -57,10 +68,10 @@ const (
 	defaultWidth  = 640
 	defaultHeight = 480
 	targetFPS     = 60
-	// xboxPorts is the hardware cap: the Xbox's physical USB expander has
-	// exactly four controller ports. We create one uinput-backed virtual pad
-	// per port at session start and bind them 1:1 to xemu's [input.bindings]
-	// entries so joiners map cleanly onto player 2-4.
+	// xboxPorts is the hardware cap: the Xbox USB expander has exactly four
+	// controller ports. We create one uinput-backed virtual pad per port at
+	// session start and bind them 1:1 to xemu's [input.bindings] entries so
+	// joiners map cleanly onto player 2-4.
 	xboxPorts = 4
 )
 
@@ -78,14 +89,11 @@ func Cage(conf CagedConf, log *logger.Logger) Caged {
 func (c *Caged) Name() string { return "xemu" }
 
 // LiveFramesActive reports whether the real capture path has produced at
-// least one frame since Start. Useful for tests/harnesses that want to
-// distinguish stub-emitter frames from xemu-rendered frames without
-// needing to sample pixel dimensions.
+// least one frame since Start.
 func (c *Caged) LiveFramesActive() bool { return c.liveFramesRecv.Load() }
 
 // SetDvd configures the ISO path xemu should mount as the DVD drive on
 // the next Start. Must be called before Start; has no effect afterward.
-// Accepts an absolute or library-relative path — callers resolve that.
 func (c *Caged) SetDvd(path string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -96,11 +104,11 @@ func (c *Caged) Init() error {
 	c.log.Info().Str("binary", c.conf.Xemu.BinaryPath).
 		Str("bios", c.conf.Xemu.BiosPath).
 		Int("w", c.w).Int("h", c.h).
-		Msg("[XEMU-CAGE] registered (stub — Phase 1)")
+		Msgf("%sregistered", logPrefixCage)
 	return nil
 }
 
-// --- app.App surface (stub behavior for Phase 1) -----------------------------
+// --- app.App surface ---------------------------------------------------------
 
 func (c *Caged) AudioSampleRate() int     { return 48000 }
 func (c *Caged) AspectRatio() float32     { return 4.0 / 3.0 }
@@ -112,10 +120,10 @@ func (c *Caged) VideoBackend() app.VideoBackend {
 	return stubBackend{}
 }
 
-func (c *Caged) SetVideoCb(cb func(app.Video))           { c.videoCb.Store(&cb) }
-func (c *Caged) SetAudioCb(cb func(app.Audio))           { c.audioCb.Store(&cb) }
-func (c *Caged) SetDataCb(cb func([]byte))               { c.dataCb.Store(&cb) }
-func (c *Caged) EmitData(_ []byte) {}
+func (c *Caged) SetVideoCb(cb func(app.Video)) { c.videoCb.Store(&cb) }
+func (c *Caged) SetAudioCb(cb func(app.Audio)) { c.audioCb.Store(&cb) }
+func (c *Caged) SetDataCb(cb func([]byte))     { c.dataCb.Store(&cb) }
+func (c *Caged) EmitData(_ []byte)             {}
 
 func (c *Caged) Input(port int, _ byte, data []byte) {
 	if port < 0 || port >= xboxPorts {
@@ -126,7 +134,8 @@ func (c *Caged) Input(port int, _ byte, data []byte) {
 		return
 	}
 	if err := pad.Inject(data); err != nil {
-		c.log.Warn().Err(err).Int("port", port).Msg("[XEMU-INPUT] inject failed")
+		c.log.Warn().Err(err).Int("port", port).
+			Msgf("%sinject failed", logPrefixInput)
 	}
 }
 
@@ -141,11 +150,12 @@ func (c *Caged) Start() {
 	c.doneCh = make(chan struct{})
 	c.mu.Unlock()
 
-	// If BiosPath is empty, stay in stub-only mode (Phase 1 compat — keeps
-	// unit tests like TestStubFrameLoopRate meaningful).
+	// If BiosPath is empty, stay in stub-only mode (keeps unit tests like
+	// TestStubFrameLoopRate meaningful without a BIOS dir mounted).
 	if c.conf.Xemu.BiosPath != "" {
 		if err := c.startProcess(); err != nil {
-			c.log.Error().Err(err).Msg("[XEMU-CAGE] xemu+xvfb start failed; falling back to stub-only")
+			c.log.Error().Err(err).
+				Msgf("%sxemu+xvfb start failed; falling back to stub-only", logPrefixCage)
 			c.teardownProcess()
 		}
 	}
@@ -158,37 +168,38 @@ func (c *Caged) startProcess() error {
 	if display == "" {
 		display = ":100"
 	}
-	c.xvfb = &Xvfb{
-		Display: display,
-		Screen:  fmt.Sprintf("%dx%dx24", c.w, c.h),
-		Log:     c.log,
+	c.xvfb = &nativeemu.Xvfb{
+		Display:   display,
+		Screen:    fmt.Sprintf("%dx%dx24", c.w, c.h),
+		Log:       c.log,
+		LogPrefix: logPrefixXvfb,
 	}
 	if err := c.xvfb.Start(); err != nil {
 		return fmt.Errorf("xvfb: %w", err)
 	}
 
-	// Videocap is an ffmpeg x11grab pipe that reads the Xvfb display xemu
-	// paints to. Startup order: Xvfb (above) → xemu → videocap. ffmpeg
-	// needs xemu to be actively drawing before its probesize phase
-	// completes, otherwise ffmpeg errors out; starting Videocap AFTER xemu
-	// avoids that race. liveFramesRecv still gates the stub emitter so
-	// downstream only ever sees one stream.
-	c.vcap = &Videocap{
-		Log:     c.log,
-		Display: display,
-		Width:   c.w,
-		Height:  c.h,
+	// Videocap reads the Xvfb display xemu paints to. Startup order: Xvfb →
+	// xemu → videocap. ffmpeg x11grab needs xemu to be actively drawing
+	// before probesize completes; starting Videocap after xemu avoids that
+	// race. liveFramesRecv still gates the stub emitter so downstream only
+	// ever sees one stream.
+	c.vcap = &nativeemu.Videocap{
+		Log:       c.log,
+		LogPrefix: logPrefixVideo,
+		Display:   display,
+		Width:     c.w,
+		Height:    c.h,
 	}
 
-	// Optional Phase-4 audio capture. Launched BEFORE xemu so the
-	// pulse socket exists by the time xemu tries to connect. The audio
-	// callback discovery inside Audiocap polls until xemu registers a
-	// sink-input, so a short startup race is tolerated.
+	// Optional audio capture. Launched BEFORE xemu so the pulse socket
+	// exists by the time xemu tries to connect. Audiocap's sink-input
+	// discovery polls, so a short startup race is tolerated.
 	var pulseSrv, pulseRun string
 	if c.conf.Xemu.AudioCapture {
-		c.pwse = &PipeWireSession{Log: c.log}
+		c.pwse = &nativeemu.PipeWireSession{Log: c.log, LogPrefix: logPrefixAudio}
 		if err := c.pwse.Start(); err != nil {
-			c.log.Error().Err(err).Msg("[XEMU-CAGE] pipewire start failed; audio disabled")
+			c.log.Error().Err(err).
+				Msgf("%spipewire start failed; audio disabled", logPrefixCage)
 			c.pwse = nil
 		} else {
 			pulseSrv = c.pwse.PulseServer()
@@ -198,31 +209,39 @@ func (c *Caged) startProcess() error {
 
 	// Virtual pads must exist BEFORE xemu launches so xemu's SDL enumerates
 	// them at initialization time. Linux SDL2 hotplug is unreliable without
-	// a running udevd (the container has none), so starting them post-launch
+	// a running udevd (the container has none), so opening them post-launch
 	// lands them after xemu's one-shot SDL_Init joystick scan — xemu sees
 	// zero controllers and binds nothing to the Xbox USB ports.
 	if c.conf.Xemu.InputInject {
 		for port := 0; port < xboxPorts; port++ {
-			pad := &VirtualPad{
+			pad := &nativeemu.VirtualPad{
 				Log:        c.log,
+				LogPrefix:  logPrefixInput,
 				DeviceName: "Microsoft X-Box 360 pad",
 				Port:       port,
 			}
 			if err := pad.Open(); err != nil {
 				c.log.Warn().Err(err).Int("port", port).
-					Msg("[XEMU-CAGE] virtual pad open failed; skipping port")
+					Msgf("%svirtual pad open failed; skipping port", logPrefixCage)
 				continue
 			}
 			c.pads[port] = pad
 		}
 	}
 
-	c.proc = &Process{
-		Conf:            c.conf.Xemu,
-		Display:         display,
-		PulseServer:     pulseSrv,
-		PulseRuntimeDir: pulseRun,
-		Log:             c.log,
+	if err := writeXemuConfig(c.conf.Xemu, c.conf.Xemu.DvdPath); err != nil {
+		return err
+	}
+
+	bin := c.conf.Xemu.BinaryPath
+	if bin == "" {
+		bin = "xemu"
+	}
+	c.proc = &nativeemu.Process{
+		Bin:       bin,
+		Env:       buildXemuEnv(display, pulseSrv, pulseRun),
+		Log:       c.log,
+		LogPrefix: logPrefixProc,
 		OnUnexpectedExit: func(err error) {
 			// Don't block the waiter goroutine — hand off to a closer.
 			// Close is idempotent and safe to call from anywhere.
@@ -234,22 +253,24 @@ func (c *Caged) startProcess() error {
 	}
 
 	// Give xemu a beat to open its window and start rendering — ffmpeg
-	// x11grab's initial probesize pass needs a live frame to lock on,
-	// otherwise it errors out with "cannot open display" races.
+	// x11grab's initial probesize needs a live frame to lock on, otherwise
+	// it errors with "cannot open display" races.
 	time.Sleep(500 * time.Millisecond)
 	if err := c.vcap.Start(c.onRealVideoFrame); err != nil {
 		return fmt.Errorf("videocap: %w", err)
 	}
 
 	if c.pwse != nil {
-		c.acap = &Audiocap{
+		c.acap = &nativeemu.Audiocap{
 			Log:             c.log,
+			LogPrefix:       logPrefixAudio,
 			AppName:         "xemu",
 			PulseServer:     pulseSrv,
 			PulseRuntimeDir: pulseRun,
 		}
 		if err := c.acap.Start(c.onRealAudioFrame); err != nil {
-			c.log.Warn().Err(err).Msg("[XEMU-CAGE] audiocap start failed; continuing without audio")
+			c.log.Warn().Err(err).
+				Msgf("%saudiocap start failed; continuing without audio", logPrefixCage)
 			c.acap = nil
 		}
 	}
@@ -257,7 +278,6 @@ func (c *Caged) startProcess() error {
 	return nil
 }
 
-// onRealAudioFrame forwards captured audio chunks to the downstream callback.
 func (c *Caged) onRealAudioFrame(au app.Audio) {
 	cbp := c.audioCb.Load()
 	if cbp == nil {
@@ -266,13 +286,10 @@ func (c *Caged) onRealAudioFrame(au app.Audio) {
 	(*cbp)(au)
 }
 
-// onRealVideoFrame receives frames from the videocap receiver and forwards
-// them to the currently-registered video callback. First live frame flips
-// liveFramesRecv so the stub loop stops emitting.
 func (c *Caged) onRealVideoFrame(v app.Video) {
 	if c.liveFramesRecv.CompareAndSwap(false, true) {
 		c.log.Info().Int("w", v.Frame.W).Int("h", v.Frame.H).
-			Msg("[XEMU-CAGE] first live frame — stub emitter parked")
+			Msgf("%sfirst live frame — stub emitter parked", logPrefixCage)
 	}
 	cbp := c.videoCb.Load()
 	if cbp == nil {
@@ -283,10 +300,9 @@ func (c *Caged) onRealVideoFrame(v app.Video) {
 
 // teardownProcess closes audiocap, videocap, process, pipewire, virtual pad,
 // xvfb if present. Safe to call multiple times and when any component is nil.
-// Order matters: kill parec before the pulse server it's connected to; kill
-// the xemu process before the videocap shim closes its socket; destroy the
-// uinput device after xemu exits so SDL doesn't race on a gone-away device;
-// kill xvfb last.
+// Order matters: kill parec before the pulse server; kill xemu before the
+// videocap shim closes its socket; destroy the uinput device after xemu
+// exits; kill xvfb last.
 func (c *Caged) teardownProcess() {
 	if c.acap != nil {
 		_ = c.acap.Close()
@@ -333,7 +349,8 @@ func (c *Caged) Close() {
 	<-done
 
 	c.teardownProcess()
-	c.log.Info().Uint64("frames", c.frameNum).Msg("[XEMU-CAGE] stopped")
+	c.log.Info().Uint64("frames", c.frameNum).
+		Msgf("%sstopped", logPrefixCage)
 }
 
 // --- stub frame source --------------------------------------------------------
@@ -368,15 +385,16 @@ func (c *Caged) runStubFrameLoop() {
 				Duration: frameDurNs,
 			})
 			if c.frameNum%targetFPS == 0 {
-				c.log.Debug().Uint64("n", c.frameNum).Msg("[XEMU-CAGE] stub frame")
+				c.log.Debug().Uint64("n", c.frameNum).
+					Msgf("%sstub frame", logPrefixCage)
 			}
 		}
 	}
 }
 
 // fillStubFrame writes a deterministic RGBA gradient: red ramps with X,
-// green ramps with Y, blue cycles with the frame counter. A 20×20 block
-// in the top-left encodes the low byte of the frame number as a solid
+// green ramps with Y, blue cycles with the frame counter. A 20×20 block in
+// the top-left encodes the low byte of the frame number as a solid
 // brightness so you can eyeball whether frames are advancing.
 func fillStubFrame(buf []byte, w, h int, frameNum uint64) {
 	b := byte(frameNum & 0xff)
@@ -391,7 +409,6 @@ func fillStubFrame(buf []byte, w, h int, frameNum uint64) {
 			buf[i+3] = 0xff
 		}
 	}
-	// Frame-counter patch, top-left 20×20.
 	for y := 0; y < 20 && y < h; y++ {
 		for x := 0; x < 20 && x < w; x++ {
 			i := (y*w + x) * 4
@@ -407,8 +424,8 @@ func fillStubFrame(buf []byte, w, h int, frameNum uint64) {
 
 type stubBackend struct{}
 
-func (stubBackend) Kind() app.RenderBackendKind                { return app.RenderBackendSoftware }
-func (stubBackend) Name() string                               { return "xemu-stub" }
-func (stubBackend) SupportsZeroCopy() bool                     { return false }
-func (stubBackend) ZeroCopyFd(_, _ uint) (int, uint64, error)  { return -1, 0, nil }
-func (stubBackend) WaitFrameReady() error                      { return nil }
+func (stubBackend) Kind() app.RenderBackendKind               { return app.RenderBackendSoftware }
+func (stubBackend) Name() string                              { return "xemu-stub" }
+func (stubBackend) SupportsZeroCopy() bool                    { return false }
+func (stubBackend) ZeroCopyFd(_, _ uint) (int, uint64, error) { return -1, 0, nil }
+func (stubBackend) WaitFrameReady() error                     { return nil }

@@ -1,4 +1,4 @@
-package xemu
+package nativeemu
 
 import (
 	"fmt"
@@ -21,6 +21,8 @@ import (
 type PipeWireSession struct {
 	// Log receives lifecycle + child stderr. Required.
 	Log *logger.Logger
+	// LogPrefix tags every log line. Defaults to "[NATIVE-AUDIO] " when empty.
+	LogPrefix string
 	// RootDir is the parent directory the per-session XDG_RUNTIME_DIR lives
 	// under. Defaults to /tmp.
 	RootDir string
@@ -31,9 +33,15 @@ type PipeWireSession struct {
 	pulse   *exec.Cmd
 }
 
-// Start launches pipewire, wireplumber, and pipewire-pulse in sequence and
-// blocks until the pulse socket is accepting connections. Returns an error
-// (and tears down any started processes) on failure.
+func (p *PipeWireSession) logPrefix() string {
+	if p.LogPrefix == "" {
+		return "[NATIVE-AUDIO] "
+	}
+	return p.LogPrefix
+}
+
+// Start launches pipewire, wireplumber, and pipewire-pulse and blocks until
+// the pulse socket is accepting connections.
 func (p *PipeWireSession) Start() error {
 	root := p.RootDir
 	if root == "" {
@@ -49,8 +57,8 @@ func (p *PipeWireSession) Start() error {
 	spawn := func(name string, extraEnv ...string) (*exec.Cmd, error) {
 		cmd := exec.Command(name)
 		cmd.Env = append(env, extraEnv...)
-		cmd.Stdout = newStreamLogger(p.Log, "[XEMU-AUDIO:"+name+"] ")
-		cmd.Stderr = newStreamLogger(p.Log, "[XEMU-AUDIO:"+name+"] ")
+		cmd.Stdout = newStreamLogger(p.Log, p.logPrefix()+name+" ")
+		cmd.Stderr = newStreamLogger(p.Log, p.logPrefix()+name+" ")
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {
 			return nil, fmt.Errorf("pipewire: start %s: %w", name, err)
@@ -74,12 +82,11 @@ func (p *PipeWireSession) Start() error {
 		goto fail
 	}
 
-	// Wait for the pulse socket to be ready.
 	if err := p.waitSocketReady(5 * time.Second); err != nil {
 		startErr = err
 		goto fail
 	}
-	p.Log.Info().Str("runtime", p.runtime).Msg("[XEMU-AUDIO] pipewire session ready")
+	p.Log.Info().Str("runtime", p.runtime).Msgf("%spipewire session ready", p.logPrefix())
 	return nil
 
 fail:
@@ -117,12 +124,11 @@ func (p *PipeWireSession) Close() error {
 	if p.runtime != "" {
 		_ = os.RemoveAll(p.runtime)
 	}
-	p.Log.Info().Msg("[XEMU-AUDIO] pipewire session closed")
+	p.Log.Info().Msgf("%spipewire session closed", p.logPrefix())
 	return nil
 }
 
-// PulseServer returns the PULSE_SERVER URI clients should use to talk to
-// this session's pulse socket. Empty before Start.
+// PulseServer returns the PULSE_SERVER URI clients should use. Empty before Start.
 func (p *PipeWireSession) PulseServer() string {
 	if p.runtime == "" {
 		return ""
@@ -133,13 +139,11 @@ func (p *PipeWireSession) PulseServer() string {
 // RuntimeDir returns this session's XDG_RUNTIME_DIR. Empty before Start.
 func (p *PipeWireSession) RuntimeDir() string { return p.runtime }
 
-// waitSocketReady polls for the pulse native socket to appear.
 func (p *PipeWireSession) waitSocketReady(d time.Duration) error {
 	sockPath := filepath.Join(p.runtime, "pulse", "native")
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(sockPath); err == nil {
-			// Also try a pactl info to ensure the server is live.
 			cmd := exec.Command("pactl", "info")
 			cmd.Env = append(os.Environ(),
 				"PULSE_SERVER=unix:"+sockPath,

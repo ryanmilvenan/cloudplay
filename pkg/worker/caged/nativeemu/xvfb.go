@@ -1,4 +1,4 @@
-package xemu
+package nativeemu
 
 import (
 	"fmt"
@@ -9,19 +9,28 @@ import (
 	"github.com/giongto35/cloud-game/v3/pkg/logger"
 )
 
-// Xvfb supervises a virtual X server so xemu has a display to render into
-// without requiring a real GPU head. On moon Xvfb proxies GLX to NVIDIA
-// via libglvnd, so GL_RENDERER still reports the RTX 3060 — see the probe
-// in tools/xemu-smoke.
+// Xvfb supervises a virtual X server so the emulator has a display to render
+// into without requiring a real GPU head. On moon Xvfb proxies GLX to NVIDIA
+// via libglvnd so GL_RENDERER still reports the dGPU.
 type Xvfb struct {
 	// Display is the X display identifier (e.g. ":100"). Required.
 	Display string
 	// Screen is the screen geometry ("WIDTHxHEIGHTxDEPTH"), e.g. "640x480x24".
 	Screen string
-	// Log receives lifecycle messages.
+	// Log receives lifecycle messages. Required.
 	Log *logger.Logger
+	// LogPrefix tags every log line with a caller-chosen scope. Defaults to
+	// "[NATIVE-XVFB] " when empty so logs are still distinguishable.
+	LogPrefix string
 
 	cmd *exec.Cmd
+}
+
+func (x *Xvfb) logPrefix() string {
+	if x.LogPrefix == "" {
+		return "[NATIVE-XVFB] "
+	}
+	return x.LogPrefix
 }
 
 // Start boots Xvfb and blocks until the display answers xdpyinfo probes.
@@ -45,9 +54,8 @@ func (x *Xvfb) Start() error {
 		return fmt.Errorf("xvfb: %w", err)
 	}
 	x.Log.Info().Int("pid", x.cmd.Process.Pid).Str("display", x.Display).
-		Str("screen", x.Screen).Msg("[XEMU-XVFB] started")
+		Str("screen", x.Screen).Msgf("%sstarted", x.logPrefix())
 
-	// Poll xdpyinfo until the display responds or we give up.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if exec.Command("xdpyinfo", "-display", x.Display).Run() == nil {
@@ -74,7 +82,7 @@ func (x *Xvfb) Close() error {
 		_ = x.cmd.Process.Kill()
 		<-done
 	}
-	x.Log.Info().Str("display", x.Display).Msg("[XEMU-XVFB] stopped")
+	x.Log.Info().Str("display", x.Display).Msgf("%sstopped", x.logPrefix())
 	x.cmd = nil
 	return nil
 }

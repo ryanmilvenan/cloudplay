@@ -33,6 +33,9 @@ Volume=/home/rocks/containers/cloudplay-dev/out:/out:z
 # BIOS roms under /xemu-bios/bios and /xemu-bios/mcpx are effectively static
 # but we keep the whole dir on one mount for simplicity.
 Volume=/home/rocks/containers/cloudplay-dev/xemu-bios:/xemu-bios:z
+# flycast BIOS (dc_boot.bin + dc_flash.bin). Optional for most DC titles;
+# required for Seaman. Empty dir is fine — adapter falls back to HLE_BIOS.
+Volume=/home/rocks/containers/cloudplay-dev/flycast-bios:/flycast-bios:z
 # Optional: test ROMs for harness use.
 # games: rw so extract-xiso can rewrite in place and xemu can write save data
 Volume=/home/rocks/containers/cloudplay-dev/games:/games:z

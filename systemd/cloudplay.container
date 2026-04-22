@@ -61,6 +61,14 @@ Volume=/home/rocks/containers/cloudplay/secrets:/secrets:ro,z
 # their intent to turn on xbox support by also flipping xemu.enabled.
 Volume=/home/rocks/containers/cloudplay/xemu-bios:/xemu-bios:z
 
+# flycast BIOS (dc_boot.bin + dc_flash.bin). Optional for most DC titles
+# — flycast synthesizes an HLE bootrom when biosPath is unset — but
+# required for Seaman and a handful of others that poke at the real
+# BIOS. Empty dir + flycast.enabled=false (config.yaml default) is fine;
+# populating it signals intent to flip flycast.enabled=true and the
+# adapter will bind Dreamcast.HLE_BIOS=no in emu.cfg.
+Volume=/home/rocks/containers/cloudplay/flycast-bios:/flycast-bios:z
+
 # Vulkan ICDs + NVIDIA userspace libs from host
 Volume=/usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro
 

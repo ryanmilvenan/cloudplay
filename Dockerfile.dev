@@ -85,6 +85,8 @@ RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
     file \
  && rm -rf /var/lib/apt/lists/*
 
+ARG FLYCAST_VERSION=v2.6
+
 # --- xemu AppImage (extracted, no FUSE needed) --------------------------------
 RUN wget -q "https://github.com/xemu-project/xemu/releases/download/${XEMU_VERSION}/xemu-${XEMU_VERSION}-x86_64.AppImage" \
       -O /tmp/xemu.AppImage && \
@@ -93,6 +95,18 @@ RUN wget -q "https://github.com/xemu-project/xemu/releases/download/${XEMU_VERSI
     mv squashfs-root xemu && \
     ln -s /opt/xemu/AppRun /usr/local/bin/xemu && \
     rm /tmp/xemu.AppImage
+
+# --- flycast AppImage (extracted, same pattern as xemu) ----------------------
+# Standalone flycast is used for the Dreamcast native backend because the
+# libretro flycast core does not expose RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE —
+# Seaman needs a mic. See pkg/worker/caged/flycast/ for the integration.
+RUN wget -q "https://github.com/flyinghead/flycast/releases/download/${FLYCAST_VERSION}/flycast-x86_64.AppImage" \
+      -O /tmp/flycast.AppImage && \
+    chmod +x /tmp/flycast.AppImage && \
+    cd /opt && /tmp/flycast.AppImage --appimage-extract && \
+    mv squashfs-root flycast && \
+    ln -s /opt/flycast/AppRun /usr/local/bin/flycast && \
+    rm /tmp/flycast.AppImage
 
 # --- Default entrypoint: stay alive, driven via `podman exec` -----------------
 WORKDIR /src

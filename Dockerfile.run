@@ -1,6 +1,7 @@
 FROM localhost/cloudplay:latest
 
 ARG XEMU_VERSION=v0.8.5
+ARG FLYCAST_VERSION=v2.6
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
@@ -47,6 +48,18 @@ RUN git clone --depth=1 https://github.com/XboxDev/extract-xiso.git /tmp/extract
 # then /deploy-cloudplay.
 COPY vendor/xemu /opt/xemu
 RUN ln -s /opt/xemu/AppRun /usr/local/bin/xemu
+
+# flycast AppImage — same "extract out-of-band, COPY in" pattern as xemu
+# (podman build's sandbox blocks in-build AppImage self-extraction, see
+# the xemu block above). Staged via scripts/extract-flycast.sh into
+# vendor/flycast/. Backs the Dreamcast native backend in pkg/worker/caged/
+# flycast — motivation: standalone flycast has mic support (Seaman),
+# libretro flycast does not.
+#
+# Upgrading flycast: bump ARG FLYCAST_VERSION + rerun
+# scripts/extract-flycast.sh, then /deploy-cloudplay.
+COPY vendor/flycast /opt/flycast
+RUN ln -s /opt/flycast/AppRun /usr/local/bin/flycast
 
 COPY xorg-dummy.conf /etc/X11/xorg.conf
 

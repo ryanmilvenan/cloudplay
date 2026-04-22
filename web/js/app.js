@@ -5,7 +5,7 @@
 import {log} from 'log';
 import {api} from 'api';
 import {input} from 'input';
-import {socket, webrtc} from 'network';
+import {mic, socket, webrtc} from 'network';
 import {opts, settings} from 'settings';
 
 import {menu} from './menu.js?v=__V__';
@@ -21,6 +21,7 @@ import {initOrphanRecover} from './app/orphanRecover.js?v=__V__';
 
 settings.init();
 log.level = settings.loadOr(opts.LOG_LEVEL, log.DEFAULT);
+mic.init();
 
 screen.add(menu, stream);
 

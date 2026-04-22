@@ -19,12 +19,15 @@ let active = false;
 
 const TARGET_RATE = 11025;
 
-// Register the setting at module-import time so the cog-menu settings
-// panel's render() sees the key in its store and draws a row for it.
-// (The panel only renders keys that are loaded. Every other `opts.*`
-// relies on the same pattern — stream.js, screen.js, keyboard.js, etc.
-// all call loadOr at import time.)
-settings.loadOr(opts.ENABLE_MICROPHONE, false);
+// init seeds the setting store so the cog-menu settings panel's render()
+// sees the ENABLE_MICROPHONE key and draws a row for it. Must be called
+// AFTER settings.init() (which wires up the localStorage provider), so
+// this is an explicit function rather than module-top-level code — the
+// same pattern screen.init / input.init / stream.init follow. app.js
+// calls it during bootstrap after settings.init().
+const init = () => {
+    settings.loadOr(opts.ENABLE_MICROPHONE, false);
+};
 
 const isEnabled = () => !!settings.loadOr(opts.ENABLE_MICROPHONE, false);
 
@@ -93,6 +96,7 @@ const stop = () => {
 };
 
 export const mic = {
+    init,
     start,
     stop,
     isActive: () => active,

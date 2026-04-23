@@ -69,6 +69,16 @@ type WebrtcMediaPipe struct {
 	mua sync.RWMutex
 	muv sync.RWMutex
 
+	// muEnc serializes video-encode calls. Background: the per-adapter stub
+	// frame loop (xemu/flycast) runs concurrently with real video capture.
+	// At the first-live-frame transition, both callbacks can fire before the
+	// stub loop observes liveFramesRecv, so two goroutines land inside
+	// ProcessVideo → NVENC.Encode at once. NVENC is not reentrant: the
+	// internal AVPacket gets reused state from the other call and ffmpeg
+	// aborts with `!avpkt->data && !avpkt->buf failed` (SIGABRT takes the
+	// whole worker down). Serialize here so no caller has to coordinate.
+	muEnc sync.Mutex
+
 	aConf config.Audio
 	vConf config.Video
 
@@ -205,6 +215,9 @@ func round(x int, scale float64) int { return (int(float64(x)*scale) + 1) & ^1 }
 // The CPU fallback ensures backward compatibility with non-Vulkan/non-NVENC
 // builds and guarantees continued operation when zero-copy is gated off.
 func (wmp *WebrtcMediaPipe) ProcessVideo(v app.Video) []byte {
+	wmp.muEnc.Lock()
+	defer wmp.muEnc.Unlock()
+
 	// Phase 3 fast path: attempt zero-copy GPU encode.
 	if wmp.ZeroCopyActive() {
 		if out := wmp.ProcessVideoZeroCopy(); out != nil {

@@ -188,7 +188,13 @@ sub(APP_VIDEO_CHANGED, (payload) => {
 
     state.h = hh
     state.w = Math.floor(hh * a)
-    resize(ww, hh, state.aspect, a > 1 && a.toFixed(6) !== a2 ? 'fill' : 'contain')
+    // Persist fit so the deferred resize() from onPlay reapplies it. Without
+    // this, joiners (who can't autoplay until they click Enable Audio) lose
+    // the computed fit on every AppVideoChange that fires while the video
+    // isn't yet ready, and end up rendering with the default 'contain' —
+    // visible on N64 where aspect_ratio (4/3) differs from frame w/h.
+    state.fit = a > 1 && a.toFixed(6) !== a2 ? 'fill' : 'contain'
+    resize(ww, hh, state.aspect, state.fit)
     recalculateSize()
 })
 

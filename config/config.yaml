@@ -171,6 +171,7 @@ emulator:
           - gdi
           - cdi
           - cue
+          - 7z
           isGlAllowed: true
           usesLibCo: true
           vfr: true
@@ -325,14 +326,14 @@ encoder:
       bitrate: 1200
       keyframeInterval: 5
     nvenc:
-      bitrate: 15000
+      bitrate: 8000
       preset: p6
       tune: ll
       profile: baseline
-      keyframeInterval: 60
+      keyframeInterval: 120
     zeroCopy: true
 recording:
-  enabled: false
+  enabled: true
   name: '%date:20060102150405%_%rand:3%_%user%_%game%'
   zip: true
   folder: ./recording
@@ -355,14 +356,15 @@ webrtc:
   iceIpMap: null
   logLevel: 6
 # Native (non-libretro) emulator backend — xemu (original Xbox).
-# Disabled by default. Enable per-host once the BIOS dir and binary are in place.
 xemu:
-  enabled: false
+  enabled: true
   binaryPath: /usr/local/bin/xemu
   biosPath: /xemu-bios
   xvfbDisplay: ':100'
   width: 640
   height: 480
+  audioCapture: true
+  inputInject: true
 
 # Native (non-libretro) emulator backend — flycast (Sega Dreamcast).
 # Standalone flycast has microphone support; the libretro flycast core does
@@ -375,20 +377,22 @@ xemu:
 # config.yaml `backend:` field (or a per-launch override) selects between
 # libretro flycast and this native backend; see pkg/config/emulator.go.
 flycast:
-  enabled: false
+  enabled: true
   binaryPath: /usr/local/bin/flycast
   biosPath: /flycast-bios
   configDir: /home/cloudretro/.config/flycast
   xvfbDisplay: ':110'
   width: 640
   height: 480
+  audioCapture: true
+  inputInject: true
   # Microphone uplink for Seaman. Requires audioCapture=true (mic uses the
   # same per-session PipeWire instance). micDeviceId is flycast's maple
   # expansion device ID for Microphone; 2 is correct for flycast v2.6
   # (MDT_Microphone in core/hw/maple/maple_cfg.h). Configurable in case
   # the enum drifts in future releases — 3 is MDT_PurupuruPack, 1 is
   # MDT_SegaVMU.
-  mic: false
+  mic: true
   micSourceName: cloudplay-mic
   micRate: 11025
   micDeviceId: 2
@@ -403,7 +407,7 @@ flycast:
 # this repo). Cache is a SQLite file on the NAS so backfill survives
 # container rebuilds.
 igdb:
-  enabled: false
+  enabled: true
   credentialsFile: /secrets/igdb.env
   cachePath: /var/mnt/data/media/games/.metadata/igdb.db
   requestsPerSecond: 4
@@ -415,8 +419,8 @@ igdb:
 # Requires igdb.enabled=true so the enricher has metadata text to embed.
 # Disabled by default; flip to true per-host.
 search:
-  enabled: false
-  embedUrl: http://lightning.local:8088/v1/embeddings
+  enabled: true
+  embedUrl: http://192.168.1.150:8088/v1/embeddings
   embedModel: embeddings
   batchSize: 32
   requestsPerSecond: 4
@@ -428,8 +432,8 @@ search:
 # when off the frontend stays on the Phase-1 "agent offline" stub.
 # Requires search.enabled=true to be useful.
 agent:
-  enabled: false
-  ollamaUrl: http://localhost:11434
+  enabled: true
+  ollamaUrl: http://host.containers.internal:11434
   model: gemma4:e4b
   timeoutMs: 8000
   topK: 10

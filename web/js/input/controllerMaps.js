@@ -176,6 +176,20 @@ const dcMap = makeMap({
     buttons: {...psxMap.buttons},
 });
 
+// Xbox (xemu native) — needs the same SNES-convention face-button swap as
+// psxMap/dcMap. The wire format from this client to the worker is the
+// libretro RetroPad bitmask (B=south, A=east, Y=west, X=north). For Xbox
+// we route through pkg/worker/caged/nativeemu/virtualpad.go which translates
+// libretro bits → xpad evdev codes; SDL2's built-in 360 mapping in xemu then
+// renames those back to A/B/X/Y. Without this swap the user's physical Y
+// (top) becomes libretro Y (west) → BTN_X → xemu reports X — exactly the
+// "press Y, get X" symptom observed in prod.
+const xboxMap = makeMap({
+    analogAxes: true,
+    analogTriggers: true,
+    buttons: {...psxMap.buttons},
+});
+
 // System name → map. Names match the `system` field from the game list.
 const systemMaps = {
     'GC': gcMap,
@@ -195,6 +209,8 @@ const systemMaps = {
     'ps2': psxMap,
     'DC': dcMap,
     'dc': dcMap,
+    'Xbox': xboxMap,
+    'xbox': xboxMap,
     'MAME': defaultMap,
     'mame': defaultMap,
     'DOS': defaultMap,

@@ -392,7 +392,17 @@ flycast:
   # (MDT_Microphone in core/hw/maple/maple_cfg.h). Configurable in case
   # the enum drifts in future releases — 3 is MDT_PurupuruPack, 1 is
   # MDT_SegaVMU.
-  mic: true
+  #
+  # Disabled (2026-04-29) because mic=true writes MapleExpansionDevices
+  # 0/1 = 2 (Microphone) into the templated emu.cfg, and that breaks
+  # gamepad input flow inside flycast — Select still opens the OSD but
+  # no other buttons reach the game. Confirmed via CDP repro: with this
+  # set to false (slot 1 falls back to VMU=1), Power Stone 2 advances
+  # past the CAPCOM splash on Start presses; with true, it doesn't.
+  # Re-enable for Seaman support once the maple-bus / SDL input
+  # interaction is understood. See docs/arch-backend.md "Notable
+  # invariants" + project_flycast_native memory.
+  mic: false
   micSourceName: cloudplay-mic
   micRate: 11025
   micDeviceId: 2
